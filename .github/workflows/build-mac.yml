@@ -1,0 +1,33 @@
+# Builds HouseKeys for Mac on GitHub's servers (no Xcode needed on your own Mac).
+# Push the project to a GitHub repo -> Actions tab -> "Build Mac" -> download "HouseKeys-mac".
+name: Build Mac
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -j 4
+
+      - name: Sign (ad-hoc) and zip
+        run: |
+          OUT=build/HouseKeys_artefacts/Release
+          mkdir -p dist
+          for b in "$OUT/VST3/HouseKeys.vst3" "$OUT/AU/HouseKeys.component" "$OUT/Standalone/HouseKeys.app"; do
+            codesign --force --deep -s - "$b"
+            ditto -c -k --keepParent "$b" "dist/$(basename "$b").zip"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HouseKeys-mac
+          path: dist/

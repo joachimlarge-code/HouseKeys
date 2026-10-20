@@ -22,10 +22,11 @@ public:
     bool acceptsMidi() const override  { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 4.0; }
+    double getTailLengthSeconds() const override { return 6.0; }
 
-    int getNumPrograms() override;
-    int getCurrentProgram() override { return currentProgram; }
+    // Programs = the 12 pianos
+    int getNumPrograms() override { return hk::kNumPianos; }
+    int getCurrentProgram() override;
     void setCurrentProgram (int index) override;
     const juce::String getProgramName (int index) override;
     void changeProgramName (int, const juce::String&) override {}
@@ -34,25 +35,17 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    void selectPiano (int index);
 
     juce::AudioProcessorValueTreeState apvts;
 
 private:
     hk::Params readParams() const;
     void handleMidi (const juce::MidiMessage& m);
+    float raw (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
 
     hk::Engine engine;
     juce::AudioBuffer<float> scratch;
-    int currentProgram = 0;
-
-    struct Raw
-    {
-        std::atomic<float>* model; std::atomic<float>* bright; std::atomic<float>* layer; std::atomic<float>* detune;
-        std::atomic<float>* tape;  std::atomic<float>* attack; std::atomic<float>* decay; std::atomic<float>* release;
-        std::atomic<float>* vel;   std::atomic<float>* chord;  std::atomic<float>* cutoff; std::atomic<float>* reso;
-        std::atomic<float>* chorus; std::atomic<float>* reverb; std::atomic<float>* size; std::atomic<float>* comp;
-        std::atomic<float>* pump;  std::atomic<float>* pumpRate; std::atomic<float>* volume;
-    } raw {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HouseKeysProcessor)
 };

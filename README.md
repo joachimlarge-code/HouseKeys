@@ -1,98 +1,68 @@
-# HouseKeys
+# HouseKeys 2
 
-FM house-piano for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel).
-Lyden lages med FM-syntese, så det er ingen samples å installere.
+Piano-plugin for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel), med 12 pianoer for house og rolig musikk.
 
-## Lyder (presets)
+## Installere (enklest)
 
-| Preset | Beskrivelse |
-|---|---|
-| 90s House Piano | Lyst, stabbete klassisk house-piano |
-| Deep House Keys | Mykt, Rhodes-aktig med bjelleaktig anslag |
-| Garage Organ | Orgel som holder tonen så lenge du holder tangenten |
-| Lo-fi Piano | Tape-wobble, sus og mørkere topp |
-| Min7 Stab | Kort og hard, spiller en moll 7-akkord fra én tangent |
-| Pumping Min9 | Moll 9-akkorder som pumper i takt med prosjektet |
-| Dark Filtered | Mørk, filtrert moll 11 for intro og breakdown |
+1. Lukk FL Studio.
+2. Åpne **Terminal**, lim inn denne linjen og trykk Enter:
+   ```
+   curl -fsSL https://raw.githubusercontent.com/joachimlarge-code/housekeys/main/install.sh | bash
+   ```
+3. Åpne FL Studio → **Options → Manage plugins** → huk av **Rescan plugins with errors** → **Find installed plugins**.
+4. Trykk **+** i Channel Rack og velg **HouseKeys**.
+
+Samme kommando oppdaterer også til nyeste versjon.
+
+## Pianoer
+
+| Energisk | | Rolig | |
+|---|---|---|---|
+| Classic House | 90s house-piano | Grand Piano | Naturlig flygel |
+| Rave Stab | Kort og hard | Soft Felt | Mykt og intimt |
+| Garage Bounce | Punchy med bite | Deep Rhodes | Varm el-piano |
+| Big Room Grand | Stort og lyst | Wurli Dream | Drømmende reed-piano |
+| Disco Upright | Honky-tonk groove | Lo-fi Keys | Støvete tape-piano |
+| Party Organ | Garage-orgel | Glass Bells | Klokker og glitter |
 
 ## Kontroller
 
-- **Model**: grunnlyden (House Piano, Deep Keys, Organ, Stab)
-- **Chord**: én tangent gir en hel akkord (Min7, Min9, Min11, Maj7, Maj9, 7sus4). Sett til Off for å spille vanlig.
-- **Sound**: Bright (hvor lys/skarp), Layer (oktav-/bjellelaget), Detune (bredde), Tape (lo-fi)
-- **Envelope**: Attack, Decay (hvor lenge tonen klinger), Release, Velocity (hvor mye anslaget betyr)
-- **Filter**: Cutoff og Reso. Automatiser Cutoff for klassiske filter-sweeps.
-- **Effects**: Chorus, Reverb, Size (romstørrelse), Comp (kompressor)
-- **Pump**: sidechain-effekt i takt med FL Studio. Depth = hvor mye, Rate = 1/4, 1/8 eller 1/16.
+**Sound** (hovedknappene)
+- **Tone**: mørk ↔ lys
+- **Decay**: hvor lenge tonene klinger
+- **Width**: hvor bred lyden er i stereo
 - **Volume**: utgangsnivå
+- **Chord**: én tangent gir en hel akkord (Min7, Min9, Min11, Maj7, Maj9, 7sus4)
 
-Sustain-pedal (CC64) fungerer. Dobbeltklikk på en knapp for å sette den tilbake.
+**Effekter**: hver seksjon har en egen **ON/OFF**-bryter.
+- **Filter**: Cutoff og Reso
+- **Chorus**: Mix
+- **Delay**: Time (følger tempoet), Feedback og Mix
+- **Reverb**: Size og Mix
+- **Pump**: sidechain-effekt i takt med FL Studio, med Rate og Depth
 
----
+Sustain-pedal fungerer. Dobbeltklikk på en knapp for å sette den tilbake til standard.
 
-## Bygge plugin-en
+## Bygge selv (for utviklere)
 
-Du kan velge mellom å bygge på din egen Mac (A) eller la GitHub bygge den for deg (B).
+Hver gang noe lastes opp til `main`, bygger GitHub Actions Mac-versjonen og legger den ut som release «latest».
 
-### A) Bygg på din egen Mac
+For å bygge lokalt på Mac (krever Xcode Command Line Tools og CMake):
+```
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j 8
+```
 
-1. Åpne **Terminal** og installer Apples utviklerverktøy:
-   ```
-   xcode-select --install
-   ```
-2. Installer CMake. Med Homebrew:
-   ```
-   brew install cmake
-   ```
-   (Uten Homebrew: last ned fra cmake.org, og velg «Tools → How to Install For Command Line Use» i appen.)
-3. Gå til mappen der du pakket ut HouseKeys og bygg:
-   ```
-   cd ~/Downloads/HouseKeys
-   cmake -B build -DCMAKE_BUILD_TYPE=Release
-   cmake --build build --config Release -j 8
-   ```
-   Første gang lastes JUCE ned automatisk, så det tar noen minutter.
-
-Når bygget er ferdig, legges plugin-en automatisk her:
-- `~/Library/Audio/Plug-Ins/VST3/HouseKeys.vst3`
-- `~/Library/Audio/Plug-Ins/Components/HouseKeys.component` (AU)
-
-Hvis bygget klager på manglende Xcode, installer full **Xcode** fra App Store og kjør `sudo xcode-select -s /Applications/Xcode.app` før du prøver igjen.
-
-### B) La GitHub bygge den (ingen verktøy på Macen)
-
-1. Lag et nytt repo på github.com og last opp hele HouseKeys-mappen, inkludert den skjulte `.github`-mappen (trykk Cmd+Shift+. i Finder for å vise skjulte mapper).
-2. Gå til fanen **Actions**. Bygget «Build Mac» starter av seg selv.
-3. Når det er grønt, last ned **HouseKeys-mac** nederst på siden.
-4. Pakk ut og flytt `HouseKeys.vst3` til `~/Library/Audio/Plug-Ins/VST3/`.
-5. Siden filen er lastet ned fra nettet, må du fjerne karantenen i Terminal:
-   ```
-   xattr -cr ~/Library/Audio/Plug-Ins/VST3/HouseKeys.vst3
-   ```
-
----
-
-## Bruke den i FL Studio
-
-1. Åpne FL Studio → **Options → Manage plugins**.
-2. Trykk **Find installed plugins** (skann). HouseKeys dukker opp under Generators.
-3. Huk av stjernen ved HouseKeys for å legge den i favorittlisten.
-4. Legg den til i Channel Rack med **+** og velg HouseKeys.
-
-Tips: Pump-effekten følger tempoet i FL Studio, så den sitter alltid i takt med kicken.
-
-## Demo uten FL Studio
-
-`tools/render_demo.cpp` spiller alle presetene til en WAV-fil uten JUCE:
+Lyddemo uten FL Studio:
 ```
 g++ -O2 -std=c++17 tools/render_demo.cpp -o render_demo && ./render_demo demo.wav
 ```
 
 ## Filer
 
-- `Source/Engine.h`: lydmotoren (FM-stemmer, akkorder, filter, effekter)
-- `Source/Presets.h`: presetene. Legg til egne her.
-- `Source/PluginProcessor.*`: kobling mot FL Studio (parametere, MIDI, lagring)
+- `Source/Engine.h`: lydmotoren og alle pianoene. Juster eller legg til pianoer i `pianos()`.
+- `Source/PluginProcessor.*`: parametere, MIDI og lagring
 - `Source/PluginEditor.*`: grensesnittet
+- `install.sh`: installasjonsskriptet
 
 Laget med [JUCE](https://juce.com) (lisens: AGPLv3 eller JUCE-lisens, gratis for personlig bruk).

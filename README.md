@@ -1,6 +1,6 @@
 # HouseKeys 2
 
-Piano-plugin for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel), med 12 pianoer for house og rolig musikk.
+Piano-plugin for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel), med 15 pianoer for house og rolig musikk.
 
 ## Installere (enklest)
 
@@ -24,6 +24,25 @@ Samme kommando oppdaterer også til nyeste versjon.
 | Big Room Grand | Stort og lyst | Wurli Dream | Drømmende reed-piano |
 | Disco Upright | Honky-tonk groove | Lo-fi Keys | Støvete tape-piano |
 | Party Organ | Garage-orgel | Glass Bells | Klokker og glitter |
+| UK Garage Keys | Lys orgel-stab | | |
+| Deep Wide Stab | Dyp og bred | | |
+| Short Organ Stab | Kort og tett | | |
+
+De tre siste er laget etter lydeksempler (UK house keys) ved å måle volumforløp, lysstyrke
+over tid, overtoner og stereobredde, og tilpasse syntesen til den treffer. De er syntetisert,
+så ingen lydklipp ligger inne i pluginen.
+
+## Bytte piano
+
+Øverst til høyre: trykk på **pilene** for å bla, eller trykk på **navnet** for en meny med alle
+pianoene sortert i Energisk og Rolig. Når du bytter piano, settes **alle** knapper og effekter
+tilbake til det pianoets egne standardinnstillinger. Lagrede prosjekter beholder dine egne justeringer.
+
+## Automation
+
+**Høyreklikk** på en knapp, meny eller ON/OFF-bryter for å få FL Studios meny med
+**Create automation clip**. Hvis FL ikke viser sin egen meny, vri på kontrollen og velg
+**Tools → Last tweaked → Create automation clip** i FL.
 
 ## Kontroller
 

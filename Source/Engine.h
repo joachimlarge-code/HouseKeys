@@ -39,6 +39,30 @@ inline const std::vector<int>& chordIntervals (int c)
 }
 
 //==============================================================================
+// User parameters
+struct Params
+{
+    int   piano  = 0;
+    float tone   = 0.5f;   // 0 dark .. 1 bright (0.5 = as designed)
+    float decay  = 0.5f;   // 0 short .. 1 long  (0.5 = as designed)
+    float width  = 0.6f;   // 0 mono .. 1 extra wide
+    float volumeDb = -3.0f;
+    int   chord  = kChordOff;
+
+    bool  filterOn = false; float cutoffHz = 3000.0f; float resonance = 0.2f;
+    bool  chorusOn = true;  float chorusMix = 0.3f;
+    bool  delayOn  = false; int delayTime = 2; float delayFeedback = 0.35f; float delayMix = 0.25f;
+    bool  reverbOn = true;  float reverbMix = 0.25f; float reverbSize = 0.5f;
+    bool  pumpOn   = false; float pumpDepth = 0.6f; int pumpRate = 0;
+};
+
+inline double delayBeats (int idx)
+{
+    static const double b[] = { 0.25, 0.5, 0.75, 1.0, 1.5, 2.0 };
+    return b[std::clamp (idx, 0, 5)];
+}
+
+//==============================================================================
 // Piano definitions
 struct AcousticDef
 {
@@ -71,6 +95,26 @@ struct FmDef
     float bark = 0.0f;                   // velocity driven asymmetric drive (EP growl)
 };
 
+// Synth keys: harmonic additive tone with two detuned stereo copies.
+// Shaped after the classic UK house / garage organ-keys stabs.
+struct KeysDef
+{
+    float level = 0.0f;
+    float tilt = 0.5f;      // spectral tilt (amplitude ~ k^-tilt)
+    float kc = 20.0f;       // harmonic roll-off
+    float odd = 1.0f;       // boost for odd harmonics (hollow / organ quint)
+    float h2 = 1.0f, h3 = 1.0f;
+    float tau = 0.4f;       // decay of the bright attack part (s)
+    float bright = 0.3f;    // how much faster upper harmonics fade
+    float sus = 0.3f;       // level of the slow part
+    float tauS = 2.0f;      // decay of the slow part (s)
+    float detune = 10.0f;   // cents between the two copies
+    float spread = 0.4f;    // stereo spread of the copies
+    float attackMs = 5.0f;
+    float release = 0.05f;  // gate release (s)
+    float brightS = 0.0f;   // how much faster upper harmonics fade in the slow part
+};
+
 struct PianoDef
 {
     const char* name;
@@ -79,6 +123,8 @@ struct PianoDef
     AcousticDef ac;
     OrganDef    organ;
     FmDef       fm;
+    KeysDef     keys;
+    Params      preset;       // what every control resets to when this piano is picked
     float attackMs = 0.5f;
     float release  = 0.25f;   // organ / FM release time (s)
     float lowDb = 0, highDb = 0, drive = 0, glue = 0.3f, tape = 0, gainDb = 0;
@@ -88,6 +134,7 @@ enum PianoId
 {
     kClassicHouse = 0, kRaveStab, kGarageBounce, kBigRoomGrand, kDiscoUpright, kPartyOrgan,
     kGrandPiano, kSoftFelt, kDeepRhodes, kWurliDream, kLofiKeys, kGlassBells,
+    kUkGarageKeys, kDeepWideStab, kShortOrganStab,   // added in 2.1 (kept last so saved projects still match)
     kNumPianos
 };
 
@@ -99,11 +146,13 @@ inline const std::array<PianoDef, kNumPianos>& pianos()
         {
             d[(size_t) id] = PianoDef {};
             d[(size_t) id].name = name; d[(size_t) id].tag = tag; d[(size_t) id].energetic = energetic;
+            d[(size_t) id].preset.piano = id;
             return d[(size_t) id];
         };
 
         // ---------------- ENERGETIC ----------------
         { auto& p = def (kClassicHouse, "Classic House", "90s house-piano", true);
+          { auto& q = p.preset; q.chorusMix = 0.25f; q.reverbMix = 0.2f; q.reverbSize = 0.45f; }
           p.gainDb = 5.0f;
           p.ac = { 0.85f, 0.88f, 0.11f, 2.2f, 1.6f, 2.5f, 0.12f, 0.35f };
           p.organ.level = 0.40f; p.organ.bars = { 0.0f, 1.0f, 0.55f, 0.0f, 0.25f }; p.organ.decay = 2.2f; p.organ.click = 0.0f;
@@ -112,6 +161,7 @@ inline const std::array<PianoDef, kNumPianos>& pianos()
           p.lowDb = 1.0f; p.highDb = 3.0f; p.drive = 0.30f; p.glue = 0.65f; }
 
         { auto& p = def (kRaveStab, "Rave Stab", "Kort og hard", true);
+          { auto& q = p.preset; q.chorusMix = 0.2f; q.delayOn = true; q.delayTime = 2; q.delayFeedback = 0.3f; q.delayMix = 0.2f; q.reverbMix = 0.2f; }
           p.gainDb = 6.0f;
           p.ac = { 0.45f, 1.0f, 0.10f, 1.0f, 1.5f, 4.0f, 0.08f, 0.5f };
           p.organ.level = 0.35f; p.organ.bars = { 0.6f, 1.0f, 0.4f, 0.0f, 0.0f }; p.organ.decay = 0.7f; p.organ.click = 0.2f;
@@ -121,6 +171,7 @@ inline const std::array<PianoDef, kNumPianos>& pianos()
           p.release = 0.12f; p.lowDb = 2.0f; p.highDb = 2.5f; p.drive = 0.55f; p.glue = 0.75f; }
 
         { auto& p = def (kGarageBounce, "Garage Bounce", "Punchy med bite", true);
+          { auto& q = p.preset; q.chorusMix = 0.35f; q.reverbMix = 0.18f; q.reverbSize = 0.4f; }
           p.gainDb = 5.0f;
           p.ac = { 0.40f, 0.8f, 0.12f, 2.0f, 1.2f, 3.0f, 0.10f, 0.3f };
           p.fm.level = 0.85f; p.fm.ratioA = 1; p.fm.indexA = 2.0f; p.fm.susA = 0.15f; p.fm.decA = 0.35f;
@@ -129,33 +180,39 @@ inline const std::array<PianoDef, kNumPianos>& pianos()
           p.release = 0.15f; p.lowDb = 1.5f; p.highDb = 1.5f; p.drive = 0.35f; p.glue = 0.6f; }
 
         { auto& p = def (kBigRoomGrand, "Big Room Grand", "Stort og lyst", true);
+          { auto& q = p.preset; q.width = 0.75f; q.chorusMix = 0.2f; q.reverbMix = 0.35f; q.reverbSize = 0.75f; }
           p.gainDb = 4.0f;
           p.ac = { 1.0f, 0.97f, 0.12f, 4.0f, 1.0f, 2.0f, 0.18f, 0.45f };
           p.organ.level = 0.12f; p.organ.bars = { 0.0f, 1.0f, 0.5f, 0.0f, 0.0f }; p.organ.decay = 3.0f; p.organ.click = 0.0f;
           p.lowDb = 2.5f; p.highDb = 4.0f; p.drive = 0.20f; p.glue = 0.65f; }
 
         { auto& p = def (kDiscoUpright, "Disco Upright", "Honky-tonk groove", true);
+          { auto& q = p.preset; q.chorusMix = 0.15f; q.reverbMix = 0.2f; q.reverbSize = 0.4f; }
           p.gainDb = 3.3f;
           p.ac = { 1.0f, 0.78f, 0.10f, 2.6f, 1.4f, 9.0f, 0.12f, 0.5f };
           p.lowDb = -1.0f; p.highDb = 2.0f; p.drive = 0.15f; p.glue = 0.5f; }
 
         { auto& p = def (kPartyOrgan, "Party Organ", "Garage-orgel", true);
+          { auto& q = p.preset; q.chorusMix = 0.5f; q.reverbMix = 0.2f; q.reverbSize = 0.45f; }
           p.gainDb = 1.5f;
           p.organ.level = 1.0f; p.organ.bars = { 0.5f, 1.0f, 0.6f, 0.4f, 0.3f }; p.organ.decay = 0.0f; p.organ.click = 0.45f;
           p.attackMs = 2.0f; p.release = 0.08f; p.lowDb = 1.0f; p.highDb = 1.0f; p.drive = 0.35f; p.glue = 0.45f; }
 
         // ---------------- CALM ----------------
         { auto& p = def (kGrandPiano, "Grand Piano", "Naturlig flygel", false);
+          { auto& q = p.preset; q.width = 0.7f; q.chorusOn = false; q.reverbMix = 0.3f; q.reverbSize = 0.65f; }
           p.gainDb = -0.5f;
           p.ac = { 1.0f, 0.60f, 0.12f, 7.0f, 1.0f, 1.0f, 0.25f, 0.30f };
           p.lowDb = 1.0f; p.highDb = 0.0f; p.glue = 0.2f; }
 
         { auto& p = def (kSoftFelt, "Soft Felt", "Mykt og intimt", false);
+          { auto& q = p.preset; q.chorusOn = false; q.reverbMix = 0.35f; q.reverbSize = 0.6f; }
           p.gainDb = 3.0f;
           p.ac = { 1.0f, 0.12f, 0.16f, 4.0f, 0.9f, 1.5f, 0.35f, 0.7f };
           p.lowDb = 2.0f; p.highDb = -4.0f; p.glue = 0.3f; p.tape = 0.12f; }
 
         { auto& p = def (kDeepRhodes, "Deep Rhodes", "Varm el-piano", false);
+          { auto& q = p.preset; q.chorusMix = 0.45f; q.reverbMix = 0.28f; q.reverbSize = 0.6f; }
           p.gainDb = -0.5f;
           p.fm.level = 1.0f; p.fm.ratioA = 1; p.fm.indexA = 1.3f; p.fm.susA = 0.25f; p.fm.decA = 1.2f;
           p.fm.octB = 1; p.fm.ratioB = 14; p.fm.indexB = 1.6f; p.fm.decB = 0.06f; p.fm.mixB = 0.45f;
@@ -163,6 +220,7 @@ inline const std::array<PianoDef, kNumPianos>& pianos()
           p.attackMs = 1.0f; p.release = 0.35f; p.lowDb = 2.0f; p.highDb = -1.0f; p.drive = 0.10f; p.glue = 0.35f; }
 
         { auto& p = def (kWurliDream, "Wurli Dream", "Drømmende reed-piano", false);
+          { auto& q = p.preset; q.chorusMix = 0.4f; q.delayOn = true; q.delayTime = 4; q.delayFeedback = 0.3f; q.delayMix = 0.18f; q.reverbMix = 0.35f; q.reverbSize = 0.7f; }
           p.gainDb = 0.5f;
           p.fm.level = 1.0f; p.fm.ratioA = 1; p.fm.indexA = 1.7f; p.fm.susA = 0.3f; p.fm.decA = 0.6f;
           p.fm.octB = 1; p.fm.ratioB = 3; p.fm.indexB = 0.7f; p.fm.decB = 0.2f; p.fm.mixB = 0.3f;
@@ -170,44 +228,37 @@ inline const std::array<PianoDef, kNumPianos>& pianos()
           p.release = 0.3f; p.lowDb = 1.0f; p.highDb = -2.0f; p.drive = 0.2f; p.glue = 0.35f; p.tape = 0.35f; }
 
         { auto& p = def (kLofiKeys, "Lo-fi Keys", "Støvete tape-piano", false);
+          { auto& q = p.preset; q.chorusMix = 0.3f; q.reverbMix = 0.3f; q.reverbSize = 0.55f; }
           p.gainDb = 1.5f;
           p.ac = { 1.0f, 0.45f, 0.13f, 3.5f, 1.2f, 4.0f, 0.25f, 0.5f };
           p.lowDb = 2.0f; p.highDb = -5.0f; p.drive = 0.25f; p.glue = 0.45f; p.tape = 0.8f; }
 
         { auto& p = def (kGlassBells, "Glass Bells", "Klokker og glitter", false);
+          { auto& q = p.preset; q.chorusMix = 0.3f; q.delayOn = true; q.delayTime = 3; q.delayFeedback = 0.4f; q.delayMix = 0.25f; q.reverbMix = 0.4f; q.reverbSize = 0.8f; }
           p.gainDb = -0.5f;
           p.ac = { 0.35f, 0.55f, 0.13f, 5.0f, 1.0f, 1.0f, 0.3f, 0.1f };
           p.fm.level = 0.8f; p.fm.ratioA = 3.5f; p.fm.indexA = 1.4f; p.fm.susA = 0.3f; p.fm.decA = 1.5f;
           p.fm.octB = 2; p.fm.ratioB = 1.41f; p.fm.indexB = 1.0f; p.fm.decB = 0.8f; p.fm.mixB = 0.4f;
           p.fm.decay = 5.0f;
           p.release = 0.6f; p.highDb = 1.0f; p.glue = 0.25f; }
+        // ---------------- ENERGETIC: UK house keys (shaped after reference stabs) ----------------
+        { auto& p = def (kUkGarageKeys, "UK Garage Keys", "Lys orgel-stab", true);
+          { auto& q = p.preset; q.width = 0.5f; q.chorusOn = false; q.reverbMix = 0.12f; q.reverbSize = 0.4f; }
+          p.keys = KeysDef { 1.0f, 0.698f, 26.0f, 3.00f, 2.10f, 2.75f, 0.046f, 0.127f, 0.604f, 0.466f, 11.4f, 0.36f, 7.5f, 0.022f, 0.034f };
+          p.attackMs = 7.5f; p.lowDb = 0.0f; p.highDb = -2.0f; p.drive = 0.10f; p.glue = 0.0f; p.gainDb = 5.5f; }
+
+        { auto& p = def (kDeepWideStab, "Deep Wide Stab", "Dyp og bred", true);
+          { auto& q = p.preset; q.width = 0.5f; q.chorusOn = false; q.reverbMix = 0.12f; q.reverbSize = 0.45f; }
+          p.keys = KeysDef { 1.0f, 0.510f, 40.0f, 1.82f, 0.59f, 0.30f, 0.162f, 0.0f, 0.68f, 1.839f, 22.9f, 0.68f, 0.8f, 0.030f, 0.681f };
+          p.attackMs = 0.8f; p.lowDb = 1.0f; p.highDb = -2.0f; p.drive = 0.17f; p.glue = 0.0f; p.gainDb = 6.5f; }
+
+        { auto& p = def (kShortOrganStab, "Short Organ Stab", "Kort og tett", true);
+          { auto& q = p.preset; q.width = 0.5f; q.chorusOn = false; q.reverbMix = 0.15f; q.reverbSize = 0.4f; }
+          p.keys = KeysDef { 1.0f, 0.232f, 12.0f, 2.20f, 1.67f, 0.98f, 0.073f, 0.937f, 0.95f, 0.478f, 21.9f, 0.20f, 1.0f, 0.065f, 0.195f };
+          p.attackMs = 1.0f; p.lowDb = 0.0f; p.highDb = -3.0f; p.drive = 0.55f; p.glue = 0.0f; p.gainDb = 7.5f; }
         return d;
     }();
     return defs;
-}
-
-//==============================================================================
-// User parameters
-struct Params
-{
-    int   piano  = kClassicHouse;
-    float tone   = 0.5f;   // 0 dark .. 1 bright (0.5 = as designed)
-    float decay  = 0.5f;   // 0 short .. 1 long  (0.5 = as designed)
-    float width  = 0.6f;   // 0 mono .. 1 extra wide
-    float volumeDb = -3.0f;
-    int   chord  = kChordOff;
-
-    bool  filterOn = false; float cutoffHz = 3000.0f; float resonance = 0.2f;
-    bool  chorusOn = true;  float chorusMix = 0.3f;
-    bool  delayOn  = false; int delayTime = 2; float delayFeedback = 0.35f; float delayMix = 0.25f;
-    bool  reverbOn = true;  float reverbMix = 0.25f; float reverbSize = 0.5f;
-    bool  pumpOn   = false; float pumpDepth = 0.6f; int pumpRate = 0;
-};
-
-inline double delayBeats (int idx)
-{
-    static const double b[] = { 0.25, 0.5, 0.75, 1.0, 1.5, 2.0 };
-    return b[std::clamp (idx, 0, 5)];
 }
 
 //==============================================================================
@@ -323,6 +374,7 @@ public:
         fs = (float) sr;
         block = std::max (32, std::min (maxBlock, 1024));
         mono.assign ((size_t) block, 0.0f);
+        side.assign ((size_t) block, 0.0f);
         voices = {};
         reverb.prepare (sr);
         chorusLine.init ((int) (0.05 * sr));
@@ -406,6 +458,10 @@ private:
         std::array<Partial, kMaxPartials> part {};
         float hamEnv = 0, hamB1 = 0, hamB2 = 0, hamA = 0, hamR = 0, hamGain = 0;
         uint32_t rng = 1;
+
+        // synth keys (two detuned copies per harmonic: re/im = copy A, re2/im2 = copy B)
+        int numKeys = 0;
+        std::array<Partial, kMaxPartials> keys {};
 
         // organ
         std::array<float, 5> orRe {}, orIm {}, orC {}, orS {};
@@ -522,6 +578,44 @@ private:
             v.hamGain = a.hammer * a.level * (0.15f + 0.85f * vel) * (0.25f + 0.75f * hard) * 0.12f;
         }
 
+        // ---- synth keys
+        if (d.keys.level > 0.0f)
+        {
+            const KeysDef& kd = d.keys;
+            const float kc   = kd.kc * std::pow (2.0f, toneOffset()) * (0.7f + 0.3f * vel);
+            const float kts  = 1.0f;   // no key tracking: matches the reference stabs
+            const float detR = std::pow (2.0f, kd.detune / 2400.0f);
+            const float rel  = std::exp (-1.0f / (std::max (0.005f, kd.release) * 0.3f * fs));
+            float norm = 0.0f;
+            int n = 0;
+            for (int k = 1; k <= kMaxPartials; ++k)
+            {
+                const float fk = f * (float) k;
+                if (fk * detR > 0.45f * fs) break;
+                float a = std::pow ((float) k, -kd.tilt) * std::exp (-(float) (k - 1) / kc);
+                if (k > 1 && (k & 1)) a *= kd.odd;
+                if (k == 2) a *= kd.h2;
+                if (k == 3) a *= kd.h3;
+                if (a < 1.0e-4f) continue;
+                Partial& pt = v.keys[(size_t) n++];
+                const float w1 = kTwoPi * fk * detR / fs, w2 = kTwoPi * fk / detR / fs;
+                const float ph1 = 2.39996f * (float) (k * k + 3), ph2 = ph1 + 1.7f * (float) k;
+                pt.c = std::cos (w1);  pt.s = std::sin (w1);  pt.re = std::cos (ph1);  pt.im = std::sin (ph1);
+                pt.c2 = std::cos (w2); pt.s2 = std::sin (w2); pt.re2 = std::cos (ph2); pt.im2 = std::sin (ph2);
+                const float tk = kd.tau * ds * kts / (1.0f + kd.bright * (float) (k - 1));
+                pt.d1 = std::exp (-1.0f / (std::max (0.01f, tk) * fs));
+                pt.d2 = std::exp (-1.0f / (std::max (0.02f, kd.tauS * ds * kts / (1.0f + kd.brightS * (float) (k - 1))) * fs));
+                pt.e1 = a * (1.0f - kd.sus);
+                pt.e2 = a * kd.sus;
+                pt.rel = rel;
+                pt.beat = true; pt.on = true;
+                norm += a;
+            }
+            v.numKeys = n;
+            const float lvl = kd.level * (0.4f + 0.6f * vel) * 0.4f / std::max (1.0f, std::sqrt (norm) * 1.3f);
+            for (int i = 0; i < n; ++i) { v.keys[(size_t) i].e1 *= lvl; v.keys[(size_t) i].e2 *= lvl; }
+        }
+
         // ---- organ
         if (d.organ.level > 0.0f)
         {
@@ -557,6 +651,12 @@ private:
             pt.d1 = std::min (pt.d1, pt.rel);
             pt.d2 = std::min (pt.d2, pt.rel);
         }
+        for (int i = 0; i < v.numKeys; ++i)
+        {
+            Partial& pt = v.keys[(size_t) i];
+            pt.d1 = std::min (pt.d1, pt.rel);
+            pt.d2 = std::min (pt.d2, pt.rel);
+        }
         v.fmStage = 2;
     }
 
@@ -565,8 +665,36 @@ private:
     {
         const PianoDef& d = pianos()[(size_t) v.piano];
         std::fill (mono.begin(), mono.begin() + n, 0.0f);
+        std::fill (side.begin(), side.begin() + n, 0.0f);
         float* out = mono.data();
+        float* sd  = side.data();
         bool alive = false;
+
+        // ---- synth keys (stereo: the two detuned copies are spread left/right)
+        if (v.numKeys > 0)
+        {
+            const float sp = d.keys.spread * std::clamp (p.width * 2.0f, 0.0f, 1.5f);   // width 50 % = as designed
+            for (int k = 0; k < v.numKeys; ++k)
+            {
+                Partial& pt = v.keys[(size_t) k];
+                if (! pt.on) continue;
+                float re = pt.re, im = pt.im, re2 = pt.re2, im2 = pt.im2, e1 = pt.e1, e2 = pt.e2;
+                const float c = pt.c, s = pt.s, c2 = pt.c2, s2 = pt.s2, d1 = pt.d1, d2 = pt.d2;
+                for (int i = 0; i < n; ++i)
+                {
+                    const float e = e1 + e2;
+                    const float a = im * e, b = im2 * e;
+                    out[i] += (a + b) * 0.5f;
+                    sd[i]  += (a - b) * 0.5f * sp;
+                    const float nr = re * c - im * s;     im = re * s + im * c;     re = nr;
+                    const float nr2 = re2 * c2 - im2 * s2; im2 = re2 * s2 + im2 * c2; re2 = nr2;
+                    e1 *= d1; e2 *= d2;
+                }
+                const float g = 1.5f - 0.5f * (re * re + im * im), g2 = 1.5f - 0.5f * (re2 * re2 + im2 * im2);
+                pt.re = re * g; pt.im = im * g; pt.re2 = re2 * g2; pt.im2 = im2 * g2; pt.e1 = e1; pt.e2 = e2;
+                if (e1 + e2 < 1.0e-5f) pt.on = false; else alive = true;
+            }
+        }
 
         // ---- acoustic
         if (v.numPartials > 0)
@@ -712,9 +840,9 @@ private:
         for (int i = 0; i < n; ++i)
         {
             if (v.attack < 1.0f) v.attack = std::min (1.0f, v.attack + v.attackInc);
-            const float s = out[i] * g * v.attack;
-            L[i] += s * gl;
-            R[i] += s * gr;
+            const float s = out[i] * g * v.attack, sdv = sd[i] * g * v.attack;
+            L[i] += s * gl + sdv;
+            R[i] += s * gr - sdv;
         }
 
         if (! alive) v.active = false;
@@ -898,7 +1026,7 @@ private:
     int block = 512;
     Params p;
     std::array<Voice, kMaxVoices> voices {};
-    std::vector<float> mono;
+    std::vector<float> mono, side;
     uint64_t counter = 0;
     bool pedal = false, needsSnap = true;
 

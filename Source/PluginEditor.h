@@ -38,14 +38,34 @@ public:
     juce::Label* createSliderTextBox (juce::Slider&) override;
 };
 
+// Right-click on any control shows the host's parameter menu (in FL Studio this is where
+// "Create automation clip" lives). Falls back to a small menu of our own.
+void showParameterMenu (juce::Component& c, const juce::String& paramID);
+
+template <class Base>
+class HostMenu : public Base
+{
+public:
+    using Base::Base;
+    juce::String paramID;
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu()) { showParameterMenu (*this, paramID); return; }
+        Base::mouseDown (e);
+    }
+    void mouseDrag (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) Base::mouseDrag (e); }
+    void mouseUp   (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) Base::mouseUp (e); }
+};
+
 class Knob : public juce::Component
 {
 public:
-    Knob (juce::AudioProcessorValueTreeState& s, const juce::String& id, const juce::String& title);
+    Knob (juce::AudioProcessorValueTreeState& s, const juce::String& id, const juce::String& title, int maxSize = 92);
     void resized() override;
-    juce::Slider slider;
-    juce::Label  label;
+    HostMenu<juce::Slider> slider;
+    juce::Label label;
 private:
+    int maxSize;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
 };
 
@@ -54,19 +74,39 @@ class Choice : public juce::Component
 public:
     Choice (juce::AudioProcessorValueTreeState& s, const juce::String& id, const juce::String& title);
     void resized() override;
-    juce::ComboBox box;
-    juce::Label    label;
+    HostMenu<juce::ComboBox> box;
+    juce::Label label;
 private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> att;
 };
 
-// One big button per piano
-class PianoPad : public juce::Button
+// Top bar: [<]  [ piano name  v ]  [>]
+class PianoSelector : public juce::Component
 {
 public:
-    PianoPad (int index);
-    void paintButton (juce::Graphics&, bool highlighted, bool down) override;
-    const int index;
+    explicit PianoSelector (HouseKeysProcessor&);
+    void resized() override;
+    void refresh();
+
+private:
+    struct Arrow : public juce::Button
+    {
+        explicit Arrow (bool left) : juce::Button (left ? "prev" : "next"), isLeft (left) {}
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+        bool isLeft;
+    };
+    struct NameBox : public juce::Button
+    {
+        NameBox() : juce::Button ("piano") {}
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+        int piano = 0;
+    };
+
+    void showMenu();
+
+    HouseKeysProcessor& proc;
+    Arrow prev { true }, next { false };
+    HostMenu<NameBox> name;
 };
 
 // Effect section card with an on/off switch
@@ -82,7 +122,7 @@ public:
 
 private:
     juce::String title;
-    juce::ToggleButton power;
+    HostMenu<juce::ToggleButton> power;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att;
     std::vector<std::unique_ptr<juce::Component>> items;
     int lastOn = -1;
@@ -99,18 +139,20 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    HouseKeysProcessor& getProcessor() { return proc; }
+
 private:
     void timerCallback() override;
 
     HouseKeysProcessor& proc;
     hkui::Look look;
 
-    std::vector<std::unique_ptr<hkui::PianoPad>> pads;
+    hkui::PianoSelector selector;
     std::vector<std::unique_ptr<hkui::Knob>> mainKnobs;
     std::unique_ptr<hkui::Choice> chord;
     std::vector<std::unique_ptr<hkui::FxCard>> cards;
 
-    juce::Rectangle<int> pianoArea, soundArea, hotTitle, calmTitle;
+    juce::Rectangle<int> soundArea;
     int lastPiano = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HouseKeysEditor)

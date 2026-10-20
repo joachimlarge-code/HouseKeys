@@ -31,7 +31,7 @@ std::unique_ptr<juce::AudioParameterChoice> cparam (const char* id, const char* 
 //==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout HouseKeysProcessor::createLayout()
 {
-    const hk::Params d;
+    const hk::Params d = hk::pianos()[0].preset;   // first piano's defaults
     juce::StringArray pianoNames;
     for (auto& p : hk::pianos()) pianoNames.add (p.name);
 
@@ -72,6 +72,75 @@ HouseKeysProcessor::HouseKeysProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "HouseKeys", createLayout())
 {
+    apvts.addParameterListener ("piano", this);
+}
+
+HouseKeysProcessor::~HouseKeysProcessor()
+{
+    apvts.removeParameterListener ("piano", this);
+    cancelPendingUpdate();
+}
+
+// The piano parameter can change from the UI, a preset or automation (possibly on the
+// audio thread). The reset of all other controls happens on the message thread.
+void HouseKeysProcessor::parameterChanged (const juce::String&, float) { triggerAsyncUpdate(); }
+
+void HouseKeysProcessor::handleAsyncUpdate()
+{
+    const int cur = (int) raw ("piano");
+    if (cur != appliedPiano.load()) applyPianoPreset (cur);
+}
+
+void HouseKeysProcessor::setParam (const char* id, float value)
+{
+    if (auto* prm = dynamic_cast<juce::RangedAudioParameter*> (apvts.getParameter (id)))
+    {
+        const float norm = prm->convertTo0to1 (value);
+        if (std::abs (prm->getValue() - norm) < 1.0e-6f) return;
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (norm);
+        prm->endChangeGesture();
+    }
+}
+
+float HouseKeysProcessor::pianoDefault (const juce::String& id) const
+{
+    const hk::Params& q = hk::pianos()[(size_t) juce::jlimit (0, hk::kNumPianos - 1, (int) raw ("piano"))].preset;
+    if (id == "tone") return q.tone;            if (id == "decay") return q.decay;
+    if (id == "width") return q.width;          if (id == "volume") return q.volumeDb;
+    if (id == "chord") return (float) q.chord;
+    if (id == "filterOn") return q.filterOn;    if (id == "cutoff") return q.cutoffHz;   if (id == "reso") return q.resonance;
+    if (id == "chorusOn") return q.chorusOn;    if (id == "chorusMix") return q.chorusMix;
+    if (id == "delayOn") return q.delayOn;      if (id == "delayTime") return (float) q.delayTime;
+    if (id == "delayFb") return q.delayFeedback; if (id == "delayMix") return q.delayMix;
+    if (id == "reverbOn") return q.reverbOn;    if (id == "reverbSize") return q.reverbSize; if (id == "reverbMix") return q.reverbMix;
+    if (id == "pumpOn") return q.pumpOn;        if (id == "pumpRate") return (float) q.pumpRate; if (id == "pumpDepth") return q.pumpDepth;
+    if (id == "piano") return raw ("piano");
+    return 0.0f;
+}
+
+void HouseKeysProcessor::resetToPianoDefault (const juce::String& id) { setParam (id.toRawUTF8(), pianoDefault (id)); }
+
+void HouseKeysProcessor::applyPianoPreset (int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) hk::kNumPianos)) return;
+    appliedPiano = index;
+    const hk::Params& q = hk::pianos()[(size_t) index].preset;
+    setParam ("tone", q.tone);              setParam ("decay", q.decay);
+    setParam ("width", q.width);            setParam ("volume", q.volumeDb);
+    setParam ("chord", (float) q.chord);
+    setParam ("filterOn", q.filterOn ? 1.0f : 0.0f);
+    setParam ("cutoff", q.cutoffHz);        setParam ("reso", q.resonance);
+    setParam ("chorusOn", q.chorusOn ? 1.0f : 0.0f);
+    setParam ("chorusMix", q.chorusMix);
+    setParam ("delayOn", q.delayOn ? 1.0f : 0.0f);
+    setParam ("delayTime", (float) q.delayTime);
+    setParam ("delayFb", q.delayFeedback);  setParam ("delayMix", q.delayMix);
+    setParam ("reverbOn", q.reverbOn ? 1.0f : 0.0f);
+    setParam ("reverbSize", q.reverbSize);  setParam ("reverbMix", q.reverbMix);
+    setParam ("pumpOn", q.pumpOn ? 1.0f : 0.0f);
+    setParam ("pumpRate", (float) q.pumpRate);
+    setParam ("pumpDepth", q.pumpDepth);
 }
 
 bool HouseKeysProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -167,13 +236,9 @@ void HouseKeysProcessor::setCurrentProgram (int index) { selectPiano (index); }
 
 void HouseKeysProcessor::selectPiano (int index)
 {
-    if (! juce::isPositiveAndBelow (index, (int) hk::kNumPianos)) return;
-    if (auto* prm = dynamic_cast<juce::RangedAudioParameter*> (apvts.getParameter ("piano")))
-    {
-        prm->beginChangeGesture();
-        prm->setValueNotifyingHost (prm->convertTo0to1 ((float) index));
-        prm->endChangeGesture();
-    }
+    index = (index % hk::kNumPianos + hk::kNumPianos) % hk::kNumPianos;   // arrows wrap around
+    setParam ("piano", (float) index);
+    applyPianoPreset (index);
 }
 
 void HouseKeysProcessor::getStateInformation (juce::MemoryBlock& destData)
@@ -185,7 +250,15 @@ void HouseKeysProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+        {
+            // Loading a saved project: keep the user's tweaks, don't reset to piano defaults.
+            auto tree = juce::ValueTree::fromXml (*xml);
+            for (auto child : tree)
+                if (child.getProperty ("id").toString() == "piano")
+                    appliedPiano = (int) child.getProperty ("value");
+            apvts.replaceState (tree);
+            cancelPendingUpdate();
+        }
 }
 
 juce::AudioProcessorEditor* HouseKeysProcessor::createEditor() { return new HouseKeysEditor (*this); }

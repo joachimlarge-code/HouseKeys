@@ -55,6 +55,7 @@ struct Params
     bool  reverbOn = true;  float reverbMix = 0.22f; float reverbSize = 0.55f;
     bool  pumpOn   = false; float pumpDepth = 0.6f; int pumpRate = 0;
     bool  vibOn    = false; float vibRate = 5.5f; float vibDepth = 0.3f;   // vibrato (Hz, 0..1 = 0..60 cents)
+    int   smpMode  = 0;       // dropped sample: 0 auto, 1 poly, 2 chord stab (one note at a time)
 };
 
 //==============================================================================

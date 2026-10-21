@@ -50,13 +50,14 @@ float presetValue (const hk::Params& q, const juce::String& id)
     if (id == "reverbOn") return q.reverbOn;    if (id == "reverbSize") return q.reverbSize; if (id == "reverbMix") return q.reverbMix;
     if (id == "pumpOn") return q.pumpOn;        if (id == "pumpRate") return (float) q.pumpRate; if (id == "pumpDepth") return q.pumpDepth;
     if (id == "vibOn") return q.vibOn;          if (id == "vibRate") return q.vibRate;   if (id == "vibDepth") return q.vibDepth;
+    if (id == "smpMode") return (float) q.smpMode;
     return 0.0f;
 }
 
 const char* const kResetIds[] = { "tone", "air", "attack", "decay", "release", "width", "volume", "chord",
                                   "filterOn", "cutoff", "reso", "satOn", "satDrive", "chorusOn", "chorusMix",
                                   "delayOn", "delayTime", "delayFb", "delayMix", "reverbOn", "reverbSize", "reverbMix",
-                                  "pumpOn", "pumpRate", "pumpDepth", "vibOn", "vibRate", "vibDepth" };
+                                  "pumpOn", "pumpRate", "pumpDepth", "vibOn", "vibRate", "vibDepth", "smpMode" };
 } // namespace
 
 //==============================================================================
@@ -104,6 +105,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout HouseKeysProcessor::createLa
     l.add (fparam ("vibRate",  "Vibrato Rate",  skewed (0.5f, 12.0f, 5.0f), d.vibRate,
                    [] (float v, int) { return juce::String (v, 1) + " Hz"; }));
     l.add (fparam ("vibDepth", "Vibrato Depth", Range (0.0f, 1.0f), d.vibDepth, pct()));
+    l.add (cparam ("smpMode", "Sample Mode", { "Auto", "Poly", "Chord stab" }, d.smpMode));
     return l;
 }
 
@@ -193,6 +195,7 @@ hk::Params HouseKeysProcessor::readParams() const
     p.reverbOn = raw ("reverbOn") > 0.5f; p.reverbSize = raw ("reverbSize"); p.reverbMix = raw ("reverbMix");
     p.pumpOn   = raw ("pumpOn") > 0.5f;   p.pumpRate = (int) raw ("pumpRate"); p.pumpDepth = raw ("pumpDepth");
     p.vibOn    = raw ("vibOn") > 0.5f;    p.vibRate = raw ("vibRate");         p.vibDepth = raw ("vibDepth");
+    p.smpMode  = (int) raw ("smpMode");
     return p;
 }
 
@@ -272,22 +275,26 @@ bool HouseKeysProcessor::loadUserSample (const juce::File& file, juce::String& m
     double sr = 44100.0;
     if (! UserSample::decode (file, audio, sr, message)) return false;
     UserSample::prepare (audio, sr);
-    const int detected = UserSample::detectRootNote (audio, sr);
-    const int root = detected >= 0 ? detected : 60;
-    installUserSample (std::move (audio), sr, root, file.getFileNameWithoutExtension());
-    message = detected >= 0 ? "Grunntone funnet: " + UserSample::noteName (root)
-                            : juce::String::fromUTF8 ("Ingen tydelig tone \xe2\x80\x93 spilles fra C4");
+    const auto an = UserSample::analyse (audio, sr);
+    installUserSample (std::move (audio), sr, an.pitched ? an.root : 60, an.cents, an.chord, file.getFileNameWithoutExtension());
+    message = an.describe();
     selectSound (hk::kDroppedSample);
     return true;
 }
 
-void HouseKeysProcessor::installUserSample (juce::AudioBuffer<float> prepared, double sr, int root, const juce::String& name)
+void HouseKeysProcessor::installUserSample (juce::AudioBuffer<float> prepared, double sr, int root, float cents, bool chord,
+                                            const juce::String& name)
 {
     userFlac = UserSample::encodeFlac (prepared, sr);
     userRate = sr;
-    userRoot = root;
+    userRoot = root; userCents = cents; userChord = chord;
+    UserSample::Analysis an; an.root = root; an.cents = cents; an.chord = chord; an.pitched = true;
+    userInfo = an.describe();
     userName = name;
-    userBanks.push_back (UserSample::makeBank (prepared, sr, root));
+    auto bank = UserSample::makeBank (prepared, sr, root);
+    for (auto& z : bank->zones) z.tuneCents = cents;
+    bank->chordSample = chord;
+    userBanks.push_back (std::move (bank));
     userBank.store (userBanks.back().get());
 }
 
@@ -299,6 +306,8 @@ void HouseKeysProcessor::getStateInformation (juce::MemoryBlock& destData)
         juce::ValueTree us ("UserSample");
         us.setProperty ("name", userName, nullptr);
         us.setProperty ("root", userRoot, nullptr);
+        us.setProperty ("cents", userCents, nullptr);
+        us.setProperty ("chord", userChord, nullptr);
         us.setProperty ("data", userFlac.toBase64Encoding(), nullptr);
         state.appendChild (us, nullptr);
     }
@@ -324,7 +333,8 @@ void HouseKeysProcessor::setStateInformation (const void* data, int sizeInBytes)
                     juce::AudioBuffer<float> audio;
                     double sr = 48000.0;
                     if (UserSample::decodeFlac (mb, audio, sr))
-                        installUserSample (std::move (audio), sr, (int) us.getProperty ("root", 60), us.getProperty ("name").toString());
+                        installUserSample (std::move (audio), sr, (int) us.getProperty ("root", 60), (float) us.getProperty ("cents", 0.0),
+                                           (bool) us.getProperty ("chord", false), us.getProperty ("name").toString());
                 }
                 tree.removeChild (us, nullptr);
             }

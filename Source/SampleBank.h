@@ -20,6 +20,7 @@ struct SampleZone
     int length = 0;                // frames
     std::vector<int16_t> data;     // interleaved stereo
     float gain = 1.0f;             // makes every layer as loud as the hardest layer of the same note
+    float tuneCents = 0.0f;        // how sharp the recording is relative to 'root' (dropped samples)
 
     float l (int i) const { return data[(size_t) i * 2] * (1.0f / 32768.0f); }
     float r (int i) const { return data[(size_t) i * 2 + 1] * (1.0f / 32768.0f); }
@@ -32,6 +33,7 @@ public:
     std::vector<SampleZone> zones;
     std::vector<SampleZone> releases;   // index = midi note (empty zone = none)
     int numLayers = 0;
+    bool chordSample = false;           // a dropped sample that is itself a chord/stab
 
     // Call after all zones are added.
     void finalise()

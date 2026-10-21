@@ -64,7 +64,7 @@ public:
                 if (v.active && &v != held && ! v.fastRelease) { v.fastRelease = true; v.released = true; }
             if (held != nullptr) { retrigger (*held, note, clamp01 (velocity)); return; }
         }
-        else if (d.mono)
+        else if (d.mono || stabMode (d))
             for (auto& v : voices)
                 if (v.active && ! v.fastRelease) { v.fastRelease = true; v.released = true; }
 
@@ -80,6 +80,13 @@ public:
     }
 
     void noteOff (int note) { noteOffInternal (note, false); }
+
+    // dropped chord samples play one at a time (classic house chord-stab style)
+    bool stabMode (const SoundDef& d) const
+    {
+        return d.sampler.user && userBank != nullptr
+            && (p.smpMode == 2 || (p.smpMode == 0 && userBank->chordSample));
+    }
 
     void setModWheel (float v) { modWheel = clamp01 (v); }   // CC1 adds vibrato
 
@@ -237,7 +244,7 @@ private:
             v.za = sb->zone (ri, layer);
             if (v.za != nullptr)
             {
-                v.inc = std::pow (2.0, (pitch - v.za->root) / 12.0) * v.za->sampleRate / sr;
+                v.inc = std::pow (2.0, (pitch - v.za->root - v.za->tuneCents / 100.0) / 12.0) * v.za->sampleRate / sr;
                 // layers are level-matched, so loudness follows velocity smoothly over the whole range
                 v.smpGain = d.sampler.level * v.za->gain * dbToGain (d.sampler.dynamics * (std::sqrt (vel) - 1.0f));
             }
@@ -248,7 +255,7 @@ private:
                 v.zo = sb->zone (ro, std::max (0, layer - 1));
                 if (v.zo != nullptr)
                 {
-                    v.incO = std::pow (2.0, (pitch + 12 - v.zo->root) / 12.0) * v.zo->sampleRate / sr;
+                    v.incO = std::pow (2.0, (pitch + 12 - v.zo->root - v.zo->tuneCents / 100.0) / 12.0) * v.zo->sampleRate / sr;
                     v.octGain = d.sampler.octave * d.sampler.level * v.zo->gain * dbToGain (d.sampler.dynamics * (std::sqrt (vel) - 1.0f));
                 }
             }
@@ -711,7 +718,7 @@ private:
         }
 
         //---- master envelope + output
-        const float relT = v.fastRelease ? 0.006f
+        const float relT = v.fastRelease ? (v.za != nullptr ? 0.015f : 0.006f)
                          : (v.za != nullptr && v.undamped) ? std::max (p.releaseS, 3.0f) : std::max (0.01f, p.releaseS);
         const float relC = std::exp (-5.0f / (relT * fs));
         const float g = v.gain;

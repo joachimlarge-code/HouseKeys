@@ -197,6 +197,7 @@ private:
     std::vector<std::unique_ptr<hkui::Knob>> mainKnobs;
     hkui::Knob* airKnob = nullptr;
     std::unique_ptr<hkui::Choice> chord;
+    std::unique_ptr<hkui::Choice> smpMode;   // only shown for 'Ditt sample'
     std::vector<std::unique_ptr<hkui::FxCard>> cards;
 
     juce::Rectangle<int> soundArea, footer, meterArea;

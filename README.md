@@ -1,4 +1,4 @@
-# HouseKeys 3.2
+# HouseKeys 3.3
 
 Et house keys-instrument for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel).
 Ekte samplet flygel, friske house-pianoer, Rhodes, pads, bass, plucks og synth-akkorder,
@@ -75,9 +75,16 @@ FL Studio lar ikke plugins lage clipet selv, så dette er den raskeste veien.
 ## Ditt sample (dra og slipp)
 
 Dra en lydfil (wav, aiff, flac, ogg, mp3) fra Finder eller FL-browseren rett inn i pluginen.
-Den fjerner stillhet, jevner ut nivået, finner grunntonen automatisk og gjør lyden spillbar over
-hele klaviaturet med alle effektene. Samplet lagres i FL-prosjektet. Lyder uten tydelig tone
-(trommer o.l.) spilles fra C4.
+Den fjerner stillhet, jevner ut nivået og analyserer lyden:
+
+- **Én tone:** grunntonen finnes og finstemmes til riktig cent, så den stemmer med resten av låta.
+- **Akkord / stab:** pluginen ser at samplet selv er en akkord og spiller det som **chord stab**:
+  én tangent om gangen, transponert slik at laveste tone i akkorden havner på tangenten du spiller.
+  Da blir det ikke grøt når du spiller flere toner.
+- **Trommer / støy:** spilles fra C4.
+
+**Modus** (vises når Ditt sample er valgt): *Auto* velger selv, *Poly* spiller alle toner samtidig,
+*Chord stab* spiller én om gangen. Samplet lagres i FL-prosjektet.
 
 ## Bruke egne pianosamples
 

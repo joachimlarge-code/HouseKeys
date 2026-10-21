@@ -581,6 +581,8 @@ HouseKeysEditor::HouseKeysEditor (HouseKeysProcessor& p)
     airKnob->label.setColour (juce::Label::textColourId, col::air);
     chord = std::make_unique<Choice> (s, "chord", "Chord");
     addAndMakeVisible (*chord);
+    smpMode = std::make_unique<Choice> (s, "smpMode", "Modus");
+    addChildComponent (*smpMode);
 
     auto knob   = [&s] (const char* id, const char* t) { return std::make_unique<Knob> (s, id, t, 80); };
     auto choice = [&s] (const char* id, const char* t) { return std::make_unique<Choice> (s, id, t); };
@@ -638,6 +640,7 @@ void HouseKeysEditor::timerCallback()
         for (auto& k : mainKnobs)
             if (k.get() != airKnob) { k->slider.setColour (juce::Slider::rotarySliderFillColourId, c); k->slider.repaint(); }
         if (browser.isVisible()) browser.repaint();
+        resized();
         repaint();
     }
     for (auto& c : cards) c->refresh();
@@ -757,7 +760,7 @@ void HouseKeysEditor::paint (juce::Graphics& g)
     if (dropMessageTicks > 0) { left = dropMessage; g.setColour (col::accent); }
     else if (soundDef (proc.getCurrentProgram()).sampler.user)
         left = proc.getUserSampleName().isNotEmpty()
-                 ? utf8 ("Ditt sample: ") + proc.getUserSampleName() + utf8 ("  \xc2\xb7  grunntone ") + UserSample::noteName (proc.getUserSampleRoot())
+                 ? utf8 ("Ditt sample: ") + proc.getUserSampleName() + utf8 ("  \xc2\xb7  ") + proc.getUserSampleInfo()
                  : utf8 ("Dra en lydfil (wav, aiff, flac, mp3) inn i pluginen for \xc3\xa5 lage din egen lyd");
     g.drawText (left, footer, juce::Justification::centredLeft);
     g.setColour (col::faint);
@@ -778,7 +781,17 @@ void HouseKeysEditor::resized()
         const int wk = inner.getWidth() / n;
         for (int i = 0; i < (int) mainKnobs.size(); ++i)
             mainKnobs[(size_t) i]->setBounds (inner.getX() + i * wk, inner.getY(), wk, inner.getHeight());
-        chord->setBounds (inner.getX() + (n - 1) * wk, inner.getY(), wk, inner.getHeight());
+        auto cell = juce::Rectangle<int> (inner.getX() + (n - 1) * wk, inner.getY(), wk, inner.getHeight());
+        const bool user = soundDef (proc.getCurrentProgram()).sampler.user;
+        smpMode->setVisible (user);
+        if (user)
+        {
+            auto top = cell.removeFromTop (cell.getHeight() / 2);
+            chord->setBounds (top.withTrimmedTop (8));
+            smpMode->setBounds (cell.withTrimmedBottom (8));
+        }
+        else
+            chord->setBounds (cell);
     }
 
     footer = { margin + 4, getHeight() - 26, getWidth() - margin * 2 - 8, 18 };

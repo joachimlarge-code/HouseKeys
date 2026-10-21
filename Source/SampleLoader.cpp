@@ -5,6 +5,7 @@
 #endif
 
 #include <atomic>
+#include <complex>
 #include <mutex>
 
 namespace
@@ -311,6 +312,174 @@ int detectRootNote (const juce::AudioBuffer<float>& audio, double sr)
     }
     const double f0 = sr / t;
     return juce::jlimit (12, 120, (int) std::lround (69.0 + 12.0 * std::log2 (f0 / 440.0)));
+}
+
+namespace
+{
+    void fft (std::vector<std::complex<double>>& a)
+    {
+        const size_t n = a.size();
+        for (size_t i = 1, j = 0; i < n; ++i)
+        {
+            size_t bit = n >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) std::swap (a[i], a[j]);
+        }
+        for (size_t len = 2; len <= n; len <<= 1)
+        {
+            const double ang = -2.0 * juce::MathConstants<double>::pi / (double) len;
+            const std::complex<double> wl (std::cos (ang), std::sin (ang));
+            for (size_t i = 0; i < n; i += len)
+            {
+                std::complex<double> w (1.0, 0.0);
+                for (size_t k = 0; k < len / 2; ++k)
+                {
+                    const auto u = a[i + k], v = a[i + k + len / 2] * w;
+                    a[i + k] = u + v; a[i + k + len / 2] = u - v;
+                    w *= wl;
+                }
+            }
+        }
+    }
+
+    // exact frequency of the YIN pitch (Hz), or -1
+    double yinFrequency (const juce::AudioBuffer<float>& audio, double sr)
+    {
+        const int skip = (int) (0.04 * sr), W = juce::jmin (4096, (int) (0.1 * sr));
+        if (audio.getNumSamples() < skip + 2 * W) return -1.0;
+        std::vector<float> x ((size_t) (2 * W));
+        for (int i = 0; i < 2 * W; ++i)
+            x[(size_t) i] = 0.5f * (audio.getSample (0, skip + i) + audio.getSample (audio.getNumChannels() > 1 ? 1 : 0, skip + i));
+        const int tauMin = (int) (sr / 2000.0), tauMax = juce::jmin (W - 1, (int) (sr / 30.0));
+        std::vector<float> d ((size_t) tauMax + 1, 0.0f), cm ((size_t) tauMax + 1, 1.0f);
+        for (int tau = 1; tau <= tauMax; ++tau)
+        {
+            double s = 0.0;
+            for (int i = 0; i < W; ++i) { const float df = x[(size_t) i] - x[(size_t) (i + tau)]; s += (double) df * df; }
+            d[(size_t) tau] = (float) s;
+        }
+        double run = 0.0;
+        for (int tau = 1; tau <= tauMax; ++tau)
+        {
+            run += d[(size_t) tau];
+            cm[(size_t) tau] = run > 0.0 ? (float) (d[(size_t) tau] * tau / run) : 1.0f;
+        }
+        int best = -1;
+        for (int tau = tauMin; tau < tauMax; ++tau)
+            if (cm[(size_t) tau] < 0.12f)
+            {
+                while (tau + 1 < tauMax && cm[(size_t) tau + 1] < cm[(size_t) tau]) ++tau;
+                best = tau;
+                break;
+            }
+        if (best < 0) return -1.0;
+        double t = best;
+        if (best > 1 && best < tauMax)
+        {
+            const double a = cm[(size_t) best - 1], b = cm[(size_t) best], c = cm[(size_t) best + 1], den = a - 2.0 * b + c;
+            if (std::abs (den) > 1.0e-12) t += 0.5 * (a - c) / den;
+        }
+        return sr / t;
+    }
+}
+
+juce::String Analysis::describe() const
+{
+    if (! pitched) return juce::String::fromUTF8 ("Ingen tydelig tone \xe2\x80\x93 spilles fra C4");
+    juce::String s = chord ? (notes >= 2 ? "Akkord funnet (" + juce::String (notes) + " toner), laveste tone " : juce::String ("Akkord, laveste tone ")) + noteName (root)
+                           : "Grunntone " + noteName (root);
+    if (std::abs (cents) >= 3.0f)
+        s += juce::String::fromUTF8 (", var ") + juce::String (std::abs (juce::roundToInt (cents)))
+           + (cents > 0.0f ? " cent for h\xc3\xb8y" : " cent for lav") + " (rettet)";
+    s = juce::String::fromUTF8 (s.toRawUTF8());
+    if (chord) s += juce::String::fromUTF8 (" \xc2\xb7 spilles som chord stab");
+    return s;
+}
+
+Analysis analyse (const juce::AudioBuffer<float>& audio, double sr)
+{
+    Analysis an;
+    const int len = audio.getNumSamples();
+    const int N = 16384;
+    const int start = juce::jmin ((int) (0.05 * sr), juce::jmax (0, len - N));
+    const int avail = juce::jmin (N, len - start);
+    if (avail < 2048) return an;
+
+    // spectrum of the steady part
+    std::vector<std::complex<double>> X ((size_t) N);
+    for (int i = 0; i < avail; ++i)
+    {
+        const double w = 0.5 - 0.5 * std::cos (2.0 * juce::MathConstants<double>::pi * i / (avail - 1));
+        const double s = 0.5 * (audio.getSample (0, start + i) + audio.getSample (audio.getNumChannels() > 1 ? 1 : 0, start + i));
+        X[(size_t) i] = { s * w, 0.0 };
+    }
+    fft (X);
+    const double binHz = sr / N;
+    std::vector<double> mag ((size_t) N / 2);
+    double mx = 1.0e-12;
+    for (int k = 1; k < N / 2; ++k) { mag[(size_t) k] = std::abs (X[(size_t) k]); if (k * binHz > 40.0 && k * binHz < 4000.0) mx = std::max (mx, mag[(size_t) k]); }
+
+    // spectral peaks (40 Hz - 4 kHz, within 30 dB of the strongest)
+    struct Peak { double f, db; };
+    std::vector<Peak> peaks;
+    for (int k = 2; k < N / 2 - 2; ++k)
+    {
+        const double f = k * binHz;
+        if (f < 40.0 || f > 4000.0) continue;
+        const double m = mag[(size_t) k];
+        if (m < mx * 0.0316 || m < mag[(size_t) k - 1] || m < mag[(size_t) k + 1] || m < mag[(size_t) k - 2] || m < mag[(size_t) k + 2]) continue;
+        const double a = std::log (mag[(size_t) k - 1] + 1e-12), b = std::log (m + 1e-12), c = std::log (mag[(size_t) k + 1] + 1e-12);
+        const double den = a - 2.0 * b + c;
+        const double off = std::abs (den) > 1e-12 ? 0.5 * (a - c) / den : 0.0;
+        peaks.push_back ({ (k + off) * binHz, 20.0 * std::log10 (m / mx) });
+    }
+
+    // fundamentals = peaks that are not harmonics of a lower, reasonably strong fundamental
+    std::vector<Peak> fund;
+    for (auto& p : peaks)
+    {
+        bool harmonic = false;
+        for (auto& f0 : fund)
+            for (int h = 2; h <= 10 && ! harmonic; ++h)
+                if (std::abs (1200.0 * std::log2 (p.f / (f0.f * h))) < 35.0) harmonic = true;
+        if (! harmonic && p.db > -16.0) fund.push_back (p);
+    }
+    // distinct notes (octave doubles of the same pitch class count once)
+    std::vector<int> classes;
+    for (auto& f : fund)
+    {
+        const int pc = ((int) std::lround (69.0 + 12.0 * std::log2 (f.f / 440.0)) % 12 + 12) % 12;
+        if (std::find (classes.begin(), classes.end(), pc) == classes.end()) classes.push_back (pc);
+    }
+
+    const double yf = yinFrequency (audio, sr);
+    // noise (drums, fx): no clear pitch and energy spread over many unrelated peaks
+    if (yf < 0.0 && (classes.size() > 6 || fund.size() > 10)) return an;
+    if (classes.size() >= 2 && classes.size() <= 6 && ! fund.empty())
+    {
+        an.pitched = an.chord = true;
+        an.notes = (int) classes.size();
+        const double f = fund.front().f;   // lowest note of the chord
+        const double midi = 69.0 + 12.0 * std::log2 (f / 440.0);
+        an.root = juce::jlimit (12, 120, (int) std::lround (midi));
+        an.cents = (float) ((midi - an.root) * 100.0);
+    }
+    else if (yf > 0.0)
+    {
+        const double midi = 69.0 + 12.0 * std::log2 (yf / 440.0);
+        an.pitched = true; an.notes = 1;
+        an.root = juce::jlimit (12, 120, (int) std::lround (midi));
+        an.cents = (float) ((midi - an.root) * 100.0);
+    }
+    else if (! fund.empty() && classes.size() == 1)
+    {
+        const double midi = 69.0 + 12.0 * std::log2 (fund.front().f / 440.0);
+        an.pitched = true; an.notes = 1;
+        an.root = juce::jlimit (12, 120, (int) std::lround (midi));
+        an.cents = (float) ((midi - an.root) * 100.0);
+    }
+    return an;
 }
 
 std::unique_ptr<hk::SampleBank> makeBank (const juce::AudioBuffer<float>& audio, double sr, int rootNote)

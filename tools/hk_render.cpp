@@ -170,7 +170,9 @@ int main (int argc, char** argv)
         if (! UserSample::decode (juce::File (us), a, usr, err)) { std::printf ("decode failed: %s\n", err.toRawUTF8()); return 1; }
         const int inLen = a.getNumSamples();
         UserSample::prepare (a, usr);
-        const int root = UserSample::detectRootNote (a, usr);
+        const auto an = UserSample::analyse (a, usr);
+        const int root = an.pitched ? an.root : -1;
+        std::printf ("analysis: %s  (root %d, cents %.1f, chord %d, notes %d)\n", an.describe().toRawUTF8(), an.root, an.cents, (int) an.chord, an.notes);
         auto flac = UserSample::encodeFlac (a, usr);
         juce::AudioBuffer<float> back; double bsr = 0;
         const bool rt = UserSample::decodeFlac (flac, back, bsr);
@@ -178,9 +180,14 @@ int main (int argc, char** argv)
                      inLen, a.getNumSamples(), root, root >= 0 ? UserSample::noteName (root).toRawUTF8() : "none",
                      (int) flac.getSize(), rt ? "ok" : "FAILED", back.getNumSamples(), bsr);
         auto ub = UserSample::makeBank (back, bsr, root >= 0 ? root : 60);
+        for (auto& z : ub->zones) z.tuneCents = an.cents;
+        ub->chordSample = an.chord;
         hk::Params prm = hk::sounds()[(size_t) hk::kDroppedSample].preset;
+        if (const char* m = std::getenv ("HK_SMP_MODE")) prm.smpMode = std::atoi (m);
         std::vector<Ev> e;
-        for (int k = 0; k < 4; ++k) addNote (e, k * sr / 2, k * sr / 2 + sr / 3, 57 + k * 4, 0.9f);
+        // house chords: Am7, Fmaj7, Dm7, Em7 (4 notes each), half a second apart
+        const int ch[4][4] = { { 57, 60, 64, 67 }, { 53, 57, 60, 64 }, { 50, 53, 57, 60 }, { 52, 55, 59, 62 } };
+        for (int k = 0; k < 4; ++k) for (int j = 0; j < 4; ++j) addNote (e, k * sr / 2, k * sr / 2 + sr / 3, ch[k][j], 0.9f);
         std::stable_sort (e.begin(), e.end(), [] (const Ev& x, const Ev& y) { return x.t != y.t ? x.t < y.t : (! x.on && y.on); });
         hk::Engine eng; eng.setParams (prm); eng.prepare (sr, 256); eng.setUserBank (ub.get());
         const int total = 4 * sr;

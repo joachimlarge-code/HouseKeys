@@ -35,6 +35,18 @@ namespace UserSample
     // Trims silence, limits the length, fades the end and sets a consistent level.
     void prepare (juce::AudioBuffer<float>& audio, double sampleRate);
 
+    struct Analysis
+    {
+        int   root = 60;          // MIDI note (lowest note of a chord)
+        float cents = 0.0f;       // how sharp the sample is relative to 'root'
+        bool  pitched = false;    // false = noise/drum
+        bool  chord = false;      // several notes at once
+        int   notes = 0;
+        juce::String describe() const;
+    };
+    // Finds the notes in the sample: single pitch (YIN, exact cents) or a chord (spectral peaks).
+    Analysis analyse (const juce::AudioBuffer<float>& audio, double sampleRate);
+
     // Fundamental frequency -> nearest MIDI note (YIN). Returns -1 if the sound has no clear pitch.
     int detectRootNote (const juce::AudioBuffer<float>& audio, double sampleRate);
 

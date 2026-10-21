@@ -48,6 +48,8 @@ public:
     bool loadUserSample (const juce::File& file, juce::String& message);
     juce::String getUserSampleName() const { return userName; }
     int getUserSampleRoot() const { return userRoot; }
+    bool isUserSampleChord() const { return userChord; }
+    juce::String getUserSampleInfo() const { return userInfo; }
 
 private:
     hk::Params readParams() const;
@@ -62,11 +64,14 @@ private:
     juce::AudioBuffer<float> scratch;
     std::atomic<int> appliedSound { hk::kDefaultSound };   // sound whose defaults are currently loaded
 
-    void installUserSample (juce::AudioBuffer<float> prepared, double sr, int root, const juce::String& name);
+    void installUserSample (juce::AudioBuffer<float> prepared, double sr, int root, float cents, bool chord, const juce::String& name);
     std::vector<std::unique_ptr<hk::SampleBank>> userBanks;  // kept alive: voices may still read old ones
     std::atomic<const hk::SampleBank*> userBank { nullptr };
     juce::String userName;
     int userRoot = 60;
+    float userCents = 0.0f;
+    bool userChord = false;
+    juce::String userInfo;
     juce::MemoryBlock userFlac;
     double userRate = 48000.0;
 

@@ -26,8 +26,8 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 6.0; }
 
-    // Programs = the 12 pianos
-    int getNumPrograms() override { return hk::kNumPianos; }
+    // Programs = the factory sounds
+    int getNumPrograms() override { return hk::kNumSounds; }
     int getCurrentProgram() override;
     void setCurrentProgram (int index) override;
     const juce::String getProgramName (int index) override;
@@ -37,9 +37,9 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
-    void selectPiano (int index);
-    float pianoDefault (const juce::String& id) const;   // the current piano's default for a control
-    void resetToPianoDefault (const juce::String& id);
+    void selectSound (int index);
+    float soundDefault (const juce::String& id) const;   // the current sound's default for a control
+    void resetToSoundDefault (const juce::String& id);
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -47,14 +47,14 @@ private:
     hk::Params readParams() const;
     void parameterChanged (const juce::String& id, float newValue) override;
     void handleAsyncUpdate() override;
-    void applyPianoPreset (int index);
-    void setParam (const char* id, float value);
+    void applySoundPreset (int index);
+    void setParam (const juce::String& id, float value);
     void handleMidi (const juce::MidiMessage& m);
     float raw (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
 
     hk::Engine engine;
     juce::AudioBuffer<float> scratch;
-    std::atomic<int> appliedPiano { 0 };   // piano whose default settings are currently loaded
+    std::atomic<int> appliedSound { hk::kDefaultSound };   // sound whose defaults are currently loaded
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HouseKeysProcessor)
 };

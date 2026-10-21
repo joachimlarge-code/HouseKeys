@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "SampleLoader.h"
 
 using namespace hkui;
 
@@ -11,12 +12,14 @@ juce::Font uiFont (float size, bool bold = false)
 
 juce::String utf8 (const char* s) { return juce::String::fromUTF8 (s); }
 
-void styleCaption (juce::Label& l, const juce::String& text)
+const hk::SoundDef& soundDef (int i) { return hk::sounds()[(size_t) juce::jlimit (0, hk::kNumSounds - 1, i)]; }
+
+void styleCaption (juce::Label& l, const juce::String& text, juce::Colour c = col::dim)
 {
     l.setText (text.toUpperCase(), juce::dontSendNotification);
     l.setJustificationType (juce::Justification::centred);
     l.setFont (uiFont (11.5f, true));
-    l.setColour (juce::Label::textColourId, col::dim);
+    l.setColour (juce::Label::textColourId, c);
     l.setInterceptsMouseClicks (false, false);
 }
 
@@ -35,12 +38,7 @@ void drawPanel (juce::Graphics& g, juce::Rectangle<int> area, const juce::String
     }
 }
 
-juce::Colour pianoColour (int piano)
-{
-    return hk::pianos()[(size_t) juce::jlimit (0, hk::kNumPianos - 1, piano)].energetic ? col::hot2 : col::calm;
-}
-
-constexpr int kW = 980, kH = 540;
+constexpr int kW = 1100, kH = 600;
 } // namespace
 
 //==============================================================================
@@ -63,13 +61,13 @@ void hkui::showParameterMenu (juce::Component& c, const juce::String& paramID)
     juce::PopupMenu m;
     m.setLookAndFeel (&ed->getLookAndFeel());
     m.addSectionHeader (param->getName (64));
-    m.addItem (1, utf8 ("Tilbakestill til pianoets standard"));
+    m.addItem (1, utf8 ("Tilbakestill til lydens standard"));
     m.addSeparator();
-    m.addItem (2, utf8 ("Automation: vri på kontrollen, og velg i FL"), false, false);
+    m.addItem (2, utf8 ("Automation: vri p\xc3\xa5 kontrollen, og velg i FL"), false, false);
     m.addItem (3, utf8 ("Tools > Last tweaked > Create automation clip"), false, false);
     juce::Component::SafePointer<HouseKeysEditor> safe (ed);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&c),
-                     [safe, paramID] (int r) { if (r == 1 && safe != nullptr) safe->getProcessor().resetToPianoDefault (paramID); });
+                     [safe, paramID] (int r) { if (r == 1 && safe != nullptr) safe->getProcessor().resetToSoundDefault (paramID); });
 }
 
 //==============================================================================
@@ -92,8 +90,8 @@ Look::Look()
     setColour (juce::PopupMenu::backgroundColourId, col::panel);
     setColour (juce::PopupMenu::textColourId, col::text);
     setColour (juce::PopupMenu::headerTextColourId, col::dim);
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, col::accent);
-    setColour (juce::PopupMenu::highlightedTextColourId, col::bg);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, col::panel2.brighter (0.15f));
+    setColour (juce::PopupMenu::highlightedTextColourId, col::text);
 }
 
 void Look::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
@@ -102,7 +100,7 @@ void Look::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, floa
     auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (3.0f);
     const float r  = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
     const auto  c  = bounds.getCentre();
-    const float lw = juce::jmax (3.0f, r * 0.12f);
+    const float lw = juce::jmax (3.0f, r * 0.11f);
     const float arcR = r - lw * 0.5f;
     const float angle = startAngle + pos * (endAngle - startAngle);
     const auto accent = s.findColour (juce::Slider::rotarySliderFillColourId);
@@ -116,8 +114,7 @@ void Look::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, floa
     {
         juce::Path val;
         val.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, startAngle, angle, true);
-        g.setGradientFill (juce::ColourGradient (accent.withRotatedHue (-0.05f), c.x - r, c.y + r,
-                                                 accent, c.x + r, c.y - r, false));
+        g.setGradientFill (juce::ColourGradient (accent.darker (0.35f), c.x - r, c.y + r, accent, c.x + r, c.y - r, false));
         g.strokePath (val, juce::PathStrokeType (lw, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
@@ -169,8 +166,21 @@ void Look::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b, bool high
     g.drawText (on ? "ON" : "OFF", txt, juce::Justification::centred);
 }
 
+void Look::drawPopupMenuSectionHeaderWithOptions (juce::Graphics& g, const juce::Rectangle<int>& area,
+                                                  const juce::String& name, const juce::PopupMenu::Options&)
+{
+    int cat = 0;
+    for (int c = 0; c < hk::kNumCategories; ++c)
+        if (name.equalsIgnoreCase (hk::categoryName (c))) cat = c;
+    auto r = area.reduced (12, 0);
+    g.setColour (col::category (cat));
+    g.fillRoundedRectangle ((float) r.getX(), (float) r.getCentreY() - 5.0f, 3.0f, 10.0f, 1.5f);
+    g.setFont (uiFont (11.5f, true));
+    g.drawText (name.toUpperCase(), r.withTrimmedLeft (10), juce::Justification::centredLeft);
+}
+
 juce::Font Look::getComboBoxFont (juce::ComboBox&) { return uiFont (14.0f, true); }
-juce::Font Look::getPopupMenuFont()                { return uiFont (15.0f); }
+juce::Font Look::getPopupMenuFont()                { return uiFont (14.5f); }
 
 void Look::positionComboBoxText (juce::ComboBox& box, juce::Label& label)
 {
@@ -181,7 +191,7 @@ void Look::positionComboBoxText (juce::ComboBox& box, juce::Label& label)
 juce::Label* Look::createSliderTextBox (juce::Slider& s)
 {
     auto* l = LookAndFeel_V4::createSliderTextBox (s);
-    l->setFont (uiFont (12.5f));
+    l->setFont (uiFont (13.5f));
     l->setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
     l->setColour (juce::Label::outlineColourId, juce::Colours::transparentBlack);
     return l;
@@ -206,9 +216,12 @@ Knob::Knob (juce::AudioProcessorValueTreeState& s, const juce::String& id, const
 
 void Knob::resized()
 {
+    // caption, knob and value as one block, centred vertically
     auto r = getLocalBounds();
-    label.setBounds (r.removeFromTop (18));
-    slider.setBounds (r.withSizeKeepingCentre (juce::jmin (r.getWidth(), maxSize), juce::jmin (r.getHeight(), maxSize + 20)));
+    const int size = juce::jmin (r.getWidth(), maxSize, r.getHeight() - 18 - 20);
+    auto block = r.withSizeKeepingCentre (r.getWidth(), 18 + size + 20);
+    label.setBounds (block.removeFromTop (18));
+    slider.setBounds (block.withSizeKeepingCentre (juce::jmax (size, 80), size + 20));
 }
 
 Choice::Choice (juce::AudioProcessorValueTreeState& s, const juce::String& id, const juce::String& title)
@@ -232,62 +245,65 @@ void Choice::resized()
 }
 
 //==============================================================================
-PianoSelector::PianoSelector (HouseKeysProcessor& p) : proc (p)
+SoundSelector::SoundSelector (HouseKeysProcessor& p) : proc (p)
 {
-    name.paramID = "piano";
+    name.paramID = "sound";
     addAndMakeVisible (prev);
     addAndMakeVisible (next);
     addAndMakeVisible (name);
-    prev.onClick = [this] { proc.selectPiano (proc.getCurrentProgram() - 1); refresh(); };
-    next.onClick = [this] { proc.selectPiano (proc.getCurrentProgram() + 1); refresh(); };
+    prev.onClick = [this] { proc.selectSound (proc.getCurrentProgram() - 1); refresh(); };
+    next.onClick = [this] { proc.selectSound (proc.getCurrentProgram() + 1); refresh(); };
     name.onClick = [this] { showMenu(); };
     for (juce::Component* c : { (juce::Component*) &prev, (juce::Component*) &next, (juce::Component*) &name })
         c->setMouseCursor (juce::MouseCursor::PointingHandCursor);
-    prev.setTooltip ("Forrige piano");
-    next.setTooltip ("Neste piano");
     refresh();
 }
 
-void PianoSelector::refresh()
+void SoundSelector::refresh()
 {
     const int cur = proc.getCurrentProgram();
-    if (name.piano != cur) { name.piano = cur; name.repaint(); }
+    if (name.sound != cur) { name.sound = cur; name.repaint(); }
 }
 
-void PianoSelector::showMenu()
+void SoundSelector::showMenu()
 {
     juce::PopupMenu m;
     m.setLookAndFeel (&getLookAndFeel());
     const int cur = proc.getCurrentProgram();
-    for (bool energetic : { true, false })
+    // three columns: pianos | keys | synths
+    const int columnStarts[] = { hk::kCatDeepKeys, hk::kCatPads };
+    for (int c = 0; c < hk::kNumCategories; ++c)
     {
-        m.addSectionHeader (energetic ? "ENERGISK" : "ROLIG");
-        for (int i = 0; i < hk::kNumPianos; ++i)
+        if (c == columnStarts[0] || c == columnStarts[1]) m.addColumnBreak();
+        m.addSectionHeader (hk::categoryName (c));
+        for (int i = 0; i < hk::kNumSounds; ++i)
         {
-            const auto& d = hk::pianos()[(size_t) i];
-            if (d.energetic != energetic) continue;
-            juce::PopupMenu::Item item (utf8 (d.name) + "   -   " + utf8 (d.tag));
-            item.setID (i + 1).setTicked (i == cur).setColour (i == cur ? pianoColour (i) : col::text);
+            const auto& d = hk::sounds()[(size_t) i];
+            if (d.category != c) continue;
+            juce::PopupMenu::Item item (utf8 (d.name));
+            item.setID (i + 1).setTicked (i == cur);
+            if (i == cur) item.setColour (col::category (c));
             m.addItem (item);
         }
     }
-    juce::Component::SafePointer<PianoSelector> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&name).withMinimumWidth (name.getWidth()),
+    juce::Component::SafePointer<SoundSelector> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&name).withMaximumNumColumns (3)
+                                               .withMinimumWidth (name.getWidth()).withStandardItemHeight (24),
                      [safe] (int r)
                      {
-                         if (r > 0 && safe != nullptr) { safe->proc.selectPiano (r - 1); safe->refresh(); }
+                         if (r > 0 && safe != nullptr) { safe->proc.selectSound (r - 1); safe->refresh(); }
                      });
 }
 
-void PianoSelector::resized()
+void SoundSelector::resized()
 {
     auto r = getLocalBounds();
-    prev.setBounds (r.removeFromLeft (44));
-    next.setBounds (r.removeFromRight (44));
+    prev.setBounds (r.removeFromLeft (46));
+    next.setBounds (r.removeFromRight (46));
     name.setBounds (r.reduced (8, 0));
 }
 
-void PianoSelector::Arrow::paintButton (juce::Graphics& g, bool highlighted, bool down)
+void SoundSelector::Arrow::paintButton (juce::Graphics& g, bool highlighted, bool down)
 {
     auto r = getLocalBounds().toFloat().reduced (1.0f);
     g.setColour (col::panel2.brighter (highlighted ? 0.18f : 0.0f).darker (down ? 0.15f : 0.0f));
@@ -302,26 +318,31 @@ void PianoSelector::Arrow::paintButton (juce::Graphics& g, bool highlighted, boo
     g.fillPath (tri);
 }
 
-void PianoSelector::NameBox::paintButton (juce::Graphics& g, bool highlighted, bool down)
+void SoundSelector::NameBox::paintButton (juce::Graphics& g, bool highlighted, bool down)
 {
-    const auto& d = hk::pianos()[(size_t) juce::jlimit (0, hk::kNumPianos - 1, piano)];
-    const auto c = pianoColour (piano);
+    const auto& d = soundDef (sound);
+    const auto c = col::category (d.category);
     auto r = getLocalBounds().toFloat().reduced (1.0f);
     g.setColour (col::panel2.brighter (highlighted ? 0.12f : 0.0f).darker (down ? 0.1f : 0.0f));
     g.fillRoundedRectangle (r, 10.0f);
-    g.setColour (c.withAlpha (0.8f));
+    g.setColour (c.withAlpha (0.85f));
     g.drawRoundedRectangle (r, 10.0f, 1.5f);
     g.fillRoundedRectangle (r.getX() + 8.0f, r.getY() + 10.0f, 4.0f, r.getHeight() - 20.0f, 2.0f);
 
-    auto t = r.reduced (22.0f, 6.0f).withTrimmedRight (20.0f);
+    auto t = r.reduced (24.0f, 6.0f).withTrimmedRight (20.0f);
     auto top = t.removeFromTop (t.getHeight() * 0.42f);
     g.setFont (uiFont (11.0f, true));
     g.setColour (c);
-    g.drawText (juce::String (d.energetic ? "ENERGISK" : "ROLIG") + "   " + utf8 (d.tag).toUpperCase(),
-                top, juce::Justification::bottomLeft);
+    g.drawText (juce::String (hk::categoryName (d.category)).toUpperCase(), top, juce::Justification::bottomLeft);
+    auto nameArea = t.toNearestInt();
     g.setFont (uiFont (21.0f, true));
     g.setColour (col::text);
-    g.drawFittedText (utf8 (d.name), t.toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
+    const auto nm = utf8 (d.name);
+    g.drawText (nm, nameArea, juce::Justification::centredLeft);
+    const int nameW = juce::GlyphArrangement::getStringWidthInt (uiFont (21.0f, true), nm);
+    g.setFont (uiFont (13.0f));
+    g.setColour (col::dim);
+    g.drawText (utf8 (d.tag), nameArea.withTrimmedLeft (nameW + 12), juce::Justification::centredLeft);
 
     const float ax = r.getRight() - 20.0f, ay = r.getCentreY();
     juce::Path arrow;
@@ -380,21 +401,28 @@ HouseKeysEditor::HouseKeysEditor (HouseKeysProcessor& p)
 
     addAndMakeVisible (selector);
 
-    for (auto [id, title] : { std::pair { "tone", "Tone" }, std::pair { "decay", "Decay" },
+    for (auto [id, title] : { std::pair { "tone", "Tone" }, std::pair { "air", "Air" }, std::pair { "attack", "Attack" },
+                              std::pair { "decay", "Decay" }, std::pair { "release", "Release" },
                               std::pair { "width", "Width" }, std::pair { "volume", "Volume" } })
     {
-        mainKnobs.push_back (std::make_unique<Knob> (s, id, title, 104));
+        mainKnobs.push_back (std::make_unique<Knob> (s, id, title, 96));
         addAndMakeVisible (*mainKnobs.back());
+        if (juce::String (id) == "air") airKnob = mainKnobs.back().get();
     }
+    airKnob->slider.setColour (juce::Slider::rotarySliderFillColourId, col::air);
+    airKnob->label.setColour (juce::Label::textColourId, col::air);
+    for (auto& k : mainKnobs) k->slider.sendLookAndFeelChange();
     chord = std::make_unique<Choice> (s, "chord", "Chord");
     addAndMakeVisible (*chord);
 
-    auto knob   = [&s] (const char* id, const char* t) { return std::make_unique<Knob> (s, id, t); };
+    auto knob   = [&s] (const char* id, const char* t) { return std::make_unique<Knob> (s, id, t, 92); };
     auto choice = [&s] (const char* id, const char* t) { return std::make_unique<Choice> (s, id, t); };
 
     auto filter = std::make_unique<FxCard> (s, "Filter", "filterOn");
     filter->add (knob ("cutoff", "Cutoff"));
     filter->add (knob ("reso", "Reso"));
+    auto sat = std::make_unique<FxCard> (s, "Saturation", "satOn");
+    sat->add (knob ("satDrive", "Drive"));
     auto chorus = std::make_unique<FxCard> (s, "Chorus", "chorusOn");
     chorus->add (knob ("chorusMix", "Mix"));
     auto delay = std::make_unique<FxCard> (s, "Delay", "delayOn");
@@ -408,7 +436,7 @@ HouseKeysEditor::HouseKeysEditor (HouseKeysProcessor& p)
     pump->add (choice ("pumpRate", "Rate"));
     pump->add (knob ("pumpDepth", "Depth"));
 
-    for (auto* c : { &filter, &chorus, &delay, &reverb, &pump })
+    for (auto* c : { &filter, &sat, &chorus, &delay, &reverb, &pump })
     {
         cards.push_back (std::move (*c));
         addAndMakeVisible (*cards.back());
@@ -430,14 +458,17 @@ void HouseKeysEditor::timerCallback()
 {
     selector.refresh();
     const int sel = proc.getCurrentProgram();
-    if (sel != lastPiano)
+    if (sel != lastSound)
     {
-        lastPiano = sel;
-        const auto c = pianoColour (sel);
-        for (auto& k : mainKnobs) { k->slider.setColour (juce::Slider::rotarySliderFillColourId, c); k->slider.repaint(); }
+        lastSound = sel;
+        const auto c = col::category (soundDef (sel).category);
+        for (auto& k : mainKnobs)
+            if (k.get() != airKnob) { k->slider.setColour (juce::Slider::rotarySliderFillColourId, c); k->slider.repaint(); }
         repaint();
     }
     for (auto& c : cards) c->refresh();
+    const auto st = SampleLibrary::statusText();
+    if (st != status) { status = st; repaint (footer); }
 }
 
 //==============================================================================
@@ -446,12 +477,12 @@ void HouseKeysEditor::paint (juce::Graphics& g)
     g.setGradientFill (juce::ColourGradient (col::bg2, 0, 0, col::bg, 0, (float) getHeight(), false));
     g.fillAll();
 
-    // logo
+    // logo: little keyboard + name
     const float lx = 22.0f, ly = 20.0f;
     for (int i = 0; i < 4; ++i) { g.setColour (col::text); g.fillRoundedRectangle (lx + i * 9.0f, ly, 8.0f, 30.0f, 1.5f); }
-    g.setColour (col::hot);  g.fillRoundedRectangle (lx + 5.5f, ly, 6.0f, 18.0f, 1.2f);
-    g.setColour (col::hot2); g.fillRoundedRectangle (lx + 14.5f, ly, 6.0f, 18.0f, 1.2f);
-    g.setColour (col::calm); g.fillRoundedRectangle (lx + 23.5f, ly, 6.0f, 18.0f, 1.2f);
+    g.setColour (col::category (1)); g.fillRoundedRectangle (lx + 5.5f, ly, 6.0f, 18.0f, 1.2f);
+    g.setColour (col::category (4)); g.fillRoundedRectangle (lx + 14.5f, ly, 6.0f, 18.0f, 1.2f);
+    g.setColour (col::air);          g.fillRoundedRectangle (lx + 23.5f, ly, 6.0f, 18.0f, 1.2f);
 
     g.setColour (col::text);
     g.setFont (uiFont (30.0f, true));
@@ -460,35 +491,41 @@ void HouseKeysEditor::paint (juce::Graphics& g)
     g.fillRoundedRectangle (262.0f, 18.0f, 26.0f, 22.0f, 6.0f);
     g.setColour (col::bg);
     g.setFont (uiFont (15.0f, true));
-    g.drawText ("2", 262, 18, 26, 22, juce::Justification::centred);
+    g.drawText ("3", 262, 18, 26, 22, juce::Justification::centred);
     g.setColour (col::dim);
     g.setFont (uiFont (12.0f, true));
-    g.drawText ("HOUSE & CHILL PIANOS", 70, 44, 300, 14, juce::Justification::centredLeft);
+    g.drawText ("REAL PIANO  /  HOUSE KEYS  /  SYNTHS", 70, 44, 320, 14, juce::Justification::centredLeft);
 
-    drawPanel (g, soundArea, "Sound", pianoColour (proc.getCurrentProgram()));
+    drawPanel (g, soundArea, "Sound", col::category (soundDef (proc.getCurrentProgram()).category));
+
+    // footer: sample status + credit
+    g.setFont (uiFont (11.5f));
+    g.setColour (col::faint);
+    g.drawText (status, footer, juce::Justification::centredLeft);
+    g.drawText (utf8 ("Piano: Salamander Grand Piano av Alexander Holm (CC-BY 3.0)"), footer, juce::Justification::centredRight);
 }
 
 void HouseKeysEditor::resized()
 {
     const int margin = 20, gap = 12;
 
-    // piano selector, top right
-    selector.setBounds (getWidth() - margin - 470, 12, 470, 52);
+    selector.setBounds (getWidth() - margin - 560, 12, 560, 54);
 
-    // main sound knobs
-    soundArea = { margin, 78, getWidth() - margin * 2, 180 };
+    soundArea = { margin, 80, getWidth() - margin * 2, 196 };
     {
-        auto inner = soundArea.reduced (20, 0).withTrimmedTop (32).withTrimmedBottom (10);
-        const int w = inner.getWidth() / 5;
-        for (int i = 0; i < 4; ++i)
+        auto inner = soundArea.reduced (14, 0).withTrimmedTop (34).withTrimmedBottom (12);
+        const int n = (int) mainKnobs.size() + 1;
+        const int w = inner.getWidth() / n;
+        for (int i = 0; i < (int) mainKnobs.size(); ++i)
             mainKnobs[(size_t) i]->setBounds (inner.getX() + i * w, inner.getY(), w, inner.getHeight());
-        chord->setBounds (inner.getX() + 4 * w, inner.getY(), w, inner.getHeight());
+        chord->setBounds (inner.getX() + (n - 1) * w, inner.getY(), w, inner.getHeight());
     }
 
-    // effect cards
+    footer = { margin + 4, getHeight() - 26, getWidth() - margin * 2 - 8, 18 };
+
     {
         auto row = juce::Rectangle<int> (margin, soundArea.getBottom() + gap, getWidth() - margin * 2,
-                                         getHeight() - soundArea.getBottom() - gap - margin);
+                                         footer.getY() - 6 - soundArea.getBottom() - gap);
         int units = 0;
         for (auto& c : cards) units += c->units();
         const int pad = 20;

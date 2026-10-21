@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Mac architectures")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(HouseKeys VERSION 2.1.0 LANGUAGES C CXX)
+project(HouseKeys VERSION 3.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,6 +20,17 @@ else()
         GIT_TAG 8.0.15
         GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(JUCE)
+endif()
+
+# --- Piano samples (Salamander Grand Piano, CC-BY 3.0) compiled into the plugin
+file(GLOB HK_PIANO_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Piano/*.ogg")
+if(HK_PIANO_FILES)
+    juce_add_binary_data(HouseKeysSamples NAMESPACE BinaryData SOURCES ${HK_PIANO_FILES})
+    set_target_properties(HouseKeysSamples PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    set(HK_HAS_SAMPLES 1)
+else()
+    message(WARNING "No piano samples in Resources/Piano - the plugin will use the modelled piano")
+    set(HK_HAS_SAMPLES 0)
 endif()
 
 juce_add_plugin(HouseKeys
@@ -40,24 +51,35 @@ juce_add_plugin(HouseKeys
 
 target_sources(HouseKeys PRIVATE
     Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    Source/PluginEditor.cpp
+    Source/SampleLoader.cpp)
 
 target_compile_definitions(HouseKeys PUBLIC
+    HK_HAS_SAMPLES=${HK_HAS_SAMPLES}
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    JUCE_USE_OGGVORBIS=1
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0)
 
 target_link_libraries(HouseKeys
     PRIVATE
         juce::juce_audio_utils
+        $<$<BOOL:${HK_HAS_SAMPLES}>:HouseKeysSamples>
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
 
-# Optional: offline demo renderer (no JUCE needed)
-option(HK_BUILD_DEMO "Build the offline demo renderer" OFF)
-if(HK_BUILD_DEMO)
-    add_executable(render_demo tools/render_demo.cpp)
+# --- Optional: offline render tool (plays every sound through the real engine to a WAV)
+option(HK_BUILD_TOOLS "Build the offline render tool" OFF)
+if(HK_BUILD_TOOLS)
+    juce_add_console_app(hk_render PRODUCT_NAME "hk_render")
+    target_sources(hk_render PRIVATE tools/hk_render.cpp Source/SampleLoader.cpp)
+    target_compile_definitions(hk_render PRIVATE HK_HAS_SAMPLES=${HK_HAS_SAMPLES} JUCE_USE_OGGVORBIS=1
+                               JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_include_directories(hk_render PRIVATE Source)
+    target_link_libraries(hk_render PRIVATE juce::juce_audio_formats
+                          $<$<BOOL:${HK_HAS_SAMPLES}>:HouseKeysSamples>
+                          juce::juce_recommended_config_flags)
 endif()

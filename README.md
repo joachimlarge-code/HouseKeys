@@ -1,87 +1,119 @@
-# HouseKeys 2
+# HouseKeys 3
 
-Piano-plugin for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel), med 15 pianoer for house og rolig musikk.
+Et house keys-instrument for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel).
+Ekte samplet flygel, friske house-pianoer, Rhodes, pads, bass, plucks og synth-akkorder,
+med innebygd Air, saturation, filter, chorus, delay, reverb og pump.
 
-## Installere (enklest)
+## Installere
 
-1. Lukk FL Studio.
+1. Lukk FL Studio (**Cmd + Q**).
 2. Åpne **Terminal**, lim inn denne linjen og trykk Enter:
    ```
    curl -fsSL https://raw.githubusercontent.com/joachimlarge-code/housekeys/main/install.sh | bash
    ```
-3. Åpne FL Studio → **Options → Manage plugins** → huk av **Rescan plugins with errors** → **Find installed plugins**.
+3. Åpne FL Studio → **Options → Manage plugins** → huk av **Rescan previously verified plugins** → **Find installed plugins**.
 4. Trykk **+** i Channel Rack og velg **HouseKeys**.
 
-Samme kommando oppdaterer også til nyeste versjon.
+Samme kommando oppdaterer til nyeste versjon.
 
-## Pianoer
+## Lyder
 
-| Energisk | | Rolig | |
-|---|---|---|---|
-| Classic House | 90s house-piano | Grand Piano | Naturlig flygel |
-| Rave Stab | Kort og hard | Soft Felt | Mykt og intimt |
-| Garage Bounce | Punchy med bite | Deep Rhodes | Varm el-piano |
-| Big Room Grand | Stort og lyst | Wurli Dream | Drømmende reed-piano |
-| Disco Upright | Honky-tonk groove | Lo-fi Keys | Støvete tape-piano |
-| Party Organ | Garage-orgel | Glass Bells | Klokker og glitter |
-| UK Garage Keys | Lys orgel-stab | | |
-| Deep Wide Stab | Dyp og bred | | |
-| Short Organ Stab | Kort og tett | | |
+| Kategori | Lyder |
+|---|---|
+| **Real Piano** | Concert Grand · Intimate Felt · Ballad Grand |
+| **Fresh House Piano** | Fresh House Piano · Piano House 90s · Sunset Piano · Pumping Chords |
+| **Bright Keys** | Crystal Keys · Glass Bells |
+| **Deep House Keys** | Deep House Keys · UK Garage Keys · Deep Wide Stab · Short Organ Stab · Garage Organ |
+| **Warm Rhodes** | Warm Rhodes · Dream Wurli · Lo-fi Rhodes |
+| **Wide Pads** | Warm Pad · Air Pad · Dark Strings |
+| **House Bass** | Deep Sub · House Bass · Pluck Bass |
+| **Plucks** | House Pluck · Soft Pluck |
+| **Melodic Chords** | Melodic Chords · Supersaw Chords · Rave Stab |
 
-De tre siste er laget etter lydeksempler (UK house keys) ved å måle volumforløp, lysstyrke
-over tid, overtoner og stereobredde, og tilpasse syntesen til den treffer. De er syntetisert,
-så ingen lydklipp ligger inne i pluginen.
+Bla med **pilene** øverst, eller trykk på navnet for en meny med alle lydene. Når du bytter
+lyd, settes alle knapper og effekter til den lydens egne innstillinger. Lagrede prosjekter
+beholder dine egne justeringer.
 
-## Bytte piano
+Alle lydene er nivåkalibrert (ca. −13,5 LUFS, pianoer −14,5, bass −17), så volumet hopper ikke når du bytter.
 
-Øverst til høyre: trykk på **pilene** for å bla, eller trykk på **navnet** for en meny med alle
-pianoene sortert i Energisk og Rolig. Når du bytter piano, settes **alle** knapper og effekter
-tilbake til det pianoets egne standardinnstillinger. Lagrede prosjekter beholder dine egne justeringer.
+## Hvordan lydene lages
 
-## Automation
-
-**Høyreklikk** på en knapp, meny eller ON/OFF-bryter for å få FL Studios meny med
-**Create automation clip**. Hvis FL ikke viser sin egen meny, vri på kontrollen og velg
-**Tools → Last tweaked → Create automation clip** i FL.
+- **Pianoene** bruker ekte samples: *Salamander Grand Piano* (Yamaha C5, 48 kHz/24-bit).
+  30 toner (hver lille ters) × 4 anslagsnivåer + egne damper-/release-lyder per tangent.
+  Ett lag spilles om gangen (ingen faset blanding mellom opptak), og lagene er nivåtilpasset,
+  så anslaget styrer volumet jevnt mens lagene gir klangen. De øverste tangentene klinger
+  udempet som på et ekte flygel, og sustain-pedal fungerer.
+- **Rhodes/Wurli/bjeller** er FM-syntese med «bark» på hardt anslag.
+- **UK house keys** er additiv syntese tilpasset lydeksempler.
+- **Pads, bass, plucks og synth-akkorder** er virtuell analog: anti-aliased sagtann/firkant/trekant/sinus
+  med opptil 7 unison-stemmer, sub-oscillator, 4-polet filter med egen konvolutt og langsom
+  analog bevegelse. Bassene er mono med legato (ingen klikk mellom toner).
 
 ## Kontroller
 
-**Sound** (hovedknappene)
+**Sound**
 - **Tone**: mørk ↔ lys
-- **Decay**: hvor lenge tonene klinger
-- **Width**: hvor bred lyden er i stereo
-- **Volume**: utgangsnivå
+- **Air**: luft og detaljer i toppen. Lager nye, myke overtoner over ~5 kHz og løfter den aller
+  øverste toppen, men holdes alltid under selve lyden, så den blir aldri skarp.
+- **Attack / Decay / Release**: hvor raskt lyden starter, hvor lenge den klinger, hvor lenge den henger igjen
+- **Width**: stereobredde (bass under 120 Hz holdes alltid mono)
+- **Volume**
 - **Chord**: én tangent gir en hel akkord (Min7, Min9, Min11, Maj7, Maj9, 7sus4)
 
-**Effekter**: hver seksjon har en egen **ON/OFF**-bryter.
-- **Filter**: Cutoff og Reso
-- **Chorus**: Mix
-- **Delay**: Time (følger tempoet), Feedback og Mix
-- **Reverb**: Size og Mix
-- **Pump**: sidechain-effekt i takt med FL Studio, med Rate og Depth
+**Effekter** (hver med ON/OFF): Filter · Saturation · Chorus · Delay (følger tempoet) · Reverb · Pump (sidechain i takt)
 
-Sustain-pedal fungerer. Dobbeltklikk på en knapp for å sette den tilbake til standard.
+**Høyreklikk** på en kontroll gir FL Studios meny med **Create automation clip**.
+Dobbeltklikk tilbakestiller.
+
+## Bruke egne pianosamples
+
+Pluginen leser først denne mappen, og bruker de innebygde samplene hvis den er tom:
+
+```
+~/Library/Application Support/HouseKeys/Piano/
+```
+
+Navngiving (wav, flac, ogg eller aiff, mono eller stereo, hvilken som helst samplerate):
+
+| Fil | Betyr |
+|---|---|
+| `C4v1.wav` | tonen C4 (midt-C), anslagslag 1 (svakest) |
+| `C4v4.wav` | tonen C4, anslagslag 4 (hardest) |
+| `F#3v2.wav` | F#3, lag 2 (bruk `#`, ikke `b`) |
+| `rel40.wav` | valgfri release-lyd for tangent 40 (1 = A0, 88 = C8) |
+
+- Du trenger ikke alle tonene. Hver tangent bruker nærmeste innspilte tone (minst hver lille ters anbefales).
+- Lagene nummereres 1, 2, 3 … uten hull. Like mange lag per tone er best.
+- Klipp bort stillhet før anslaget. Pluginen nivåtilpasser lagene selv.
+- Start FL Studio på nytt etter at du har lagt inn eller fjernet samples. Nederst til venstre i pluginen står det hvilke samples som er lastet.
 
 ## Bygge selv (for utviklere)
 
-Hver gang noe lastes opp til `main`, bygger GitHub Actions Mac-versjonen og legger den ut som release «latest».
+GitHub Actions bygger Mac-versjonen ved hver push til `main` og legger den ut som release «latest».
 
-For å bygge lokalt på Mac (krever Xcode Command Line Tools og CMake):
+Lokalt på Mac (Xcode Command Line Tools + CMake):
 ```
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j 8
 ```
 
-Lyddemo uten FL Studio:
+Render-verktøy som spiller alle lydene gjennom motoren til en WAV-fil:
 ```
-g++ -O2 -std=c++17 tools/render_demo.cpp -o render_demo && ./render_demo demo.wav
+cmake -B build -DHK_BUILD_TOOLS=ON && cmake --build build --target hk_render
+./build/hk_render_artefacts/Release/hk_render demo.wav
 ```
 
 ## Filer
 
-- `Source/Engine.h`: lydmotoren og alle pianoene. Juster eller legg til pianoer i `pianos()`.
-- `Source/PluginProcessor.*`: parametere, MIDI og lagring
-- `Source/PluginEditor.*`: grensesnittet
-- `install.sh`: installasjonsskriptet
+- `Source/Sounds.h`: alle lydene og standardinnstillingene deres
+- `Source/Engine.h`: stemmer, sampler, synth og effektkjede
+- `Source/Dsp.h`: filtre, reverb, Air, saturation
+- `Source/SampleBank.h`, `Source/SampleLoader.*`: sample-banken og lasting (deles mellom alle instanser)
+- `Source/PluginProcessor.*`, `Source/PluginEditor.*`: FL Studio-kobling og grensesnitt
+- `Resources/Piano/`: pianosamplene (se lisens der)
+- `tools/prepare_piano_samples.py`: hvordan samplene ble laget fra Salamander-originalene
 
-Laget med [JUCE](https://juce.com) (lisens: AGPLv3 eller JUCE-lisens, gratis for personlig bruk).
+## Lisenser og kreditering
+
+- Piano: **Salamander Grand Piano v3 av Alexander Holm**, CC-BY 3.0 (`Resources/Piano/`)
+- Laget med [JUCE](https://juce.com) (AGPLv3 eller JUCE-lisens, gratis for personlig bruk)

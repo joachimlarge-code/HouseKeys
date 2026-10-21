@@ -7,20 +7,25 @@ namespace hkui
 {
 namespace col
 {
-    const juce::Colour bg      { 0xff121016 };
-    const juce::Colour bg2     { 0xff1b1822 };
-    const juce::Colour panel   { 0xff211e29 };
-    const juce::Colour panel2  { 0xff2a2634 };
-    const juce::Colour border  { 0xff35303f };
-    const juce::Colour track   { 0xff3b3647 };
-    const juce::Colour knob    { 0xff2e2a38 };
-    const juce::Colour hot     { 0xffff7a45 };   // energetic
-    const juce::Colour hot2    { 0xffffb43c };
-    const juce::Colour calm    { 0xff5ec8ff };   // calm
-    const juce::Colour calm2   { 0xff9a86ff };
+    const juce::Colour bg      { 0xff0f0d13 };
+    const juce::Colour bg2     { 0xff19161f };
+    const juce::Colour panel   { 0xff1e1b26 };
+    const juce::Colour panel2  { 0xff27232f };
+    const juce::Colour border  { 0xff332e3d };
+    const juce::Colour track   { 0xff383344 };
+    const juce::Colour knob    { 0xff2c2836 };
     const juce::Colour accent  { 0xffffb43c };
-    const juce::Colour text    { 0xfff1ebf5 };
-    const juce::Colour dim     { 0xff8d859b };
+    const juce::Colour air     { 0xff7fe3ff };
+    const juce::Colour text    { 0xfff2ecf6 };
+    const juce::Colour dim     { 0xff8b8399 };
+    const juce::Colour faint   { 0xff5d5669 };
+
+    inline juce::Colour category (int c)
+    {
+        static const juce::uint32 c9[] = { 0xfff1dfbd, 0xffffb43c, 0xff7fe3ff, 0xffa995ff, 0xffff8a5c,
+                                           0xff45d9ad, 0xffff5f9e, 0xffc8ef5f, 0xff63b8ff };
+        return juce::Colour (c9[juce::jlimit (0, 8, c)]);
+    }
 }
 
 class Look : public juce::LookAndFeel_V4
@@ -32,6 +37,8 @@ public:
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh,
                        juce::ComboBox&) override;
     void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
+    void drawPopupMenuSectionHeaderWithOptions (juce::Graphics&, const juce::Rectangle<int>&, const juce::String&,
+                                                const juce::PopupMenu::Options&) override;
     juce::Font getComboBoxFont (juce::ComboBox&) override;
     juce::Font getPopupMenuFont() override;
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
@@ -80,11 +87,11 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> att;
 };
 
-// Top bar: [<]  [ piano name  v ]  [>]
-class PianoSelector : public juce::Component
+// Top bar: [<]  [ CATEGORY  name  tag  v ]  [>]
+class SoundSelector : public juce::Component
 {
 public:
-    explicit PianoSelector (HouseKeysProcessor&);
+    explicit SoundSelector (HouseKeysProcessor&);
     void resized() override;
     void refresh();
 
@@ -97,9 +104,9 @@ private:
     };
     struct NameBox : public juce::Button
     {
-        NameBox() : juce::Button ("piano") {}
+        NameBox() : juce::Button ("sound") {}
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
-        int piano = 0;
+        int sound = 0;
     };
 
     void showMenu();
@@ -147,13 +154,15 @@ private:
     HouseKeysProcessor& proc;
     hkui::Look look;
 
-    hkui::PianoSelector selector;
+    hkui::SoundSelector selector;
     std::vector<std::unique_ptr<hkui::Knob>> mainKnobs;
+    hkui::Knob* airKnob = nullptr;
     std::unique_ptr<hkui::Choice> chord;
     std::vector<std::unique_ptr<hkui::FxCard>> cards;
 
-    juce::Rectangle<int> soundArea;
-    int lastPiano = -1;
+    juce::Rectangle<int> soundArea, footer;
+    juce::String status;
+    int lastSound = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HouseKeysEditor)
 };

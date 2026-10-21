@@ -1,372 +1,23 @@
-// HouseKeys 2 - sound engine.
-// Plain C++17 with no JUCE dependency, so the plugin and the offline demo
-// renderer (tools/render_demo.cpp) run exactly the same code.
-//
-// Every piano is a mix of three sound sources:
-//   - Acoustic: additive "modelled" piano (inharmonic partials, two-stage decay,
-//               detuned strings, hammer noise, damper on release)
-//   - Organ:    drawbar sines with key click (optionally decaying)
-//   - FM:       two FM operator pairs for electric pianos, stabs and bells
-// followed by a per-piano colour chain (EQ, drive, glue compressor, tape) and
-// the user effects (filter, chorus, delay, reverb, pump), each with on/off.
+// HouseKeys 3 - sound engine (no JUCE dependency).
+// Voices mix the sources described in Sounds.h; the master chain is:
+//   colour (low cut, shelves + Tone, drive, glue, tape) -> Filter -> Saturation -> Air -> Pump
+//   -> Chorus -> Delay -> Reverb -> Width (bass kept mono) -> volume -> soft limiter
 #pragma once
 
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <vector>
+#include "Dsp.h"
+#include "SampleBank.h"
+#include "Sounds.h"
 
 namespace hk
 {
-static constexpr float kPi    = 3.14159265358979f;
-static constexpr float kTwoPi = 6.28318530717959f;
-
-inline float dbToGain (float db) { return std::pow (10.0f, db * 0.05f); }
-inline float clamp01  (float x)  { return std::min (1.0f, std::max (0.0f, x)); }
-inline float onePoleCoef (float hz, float sr) { return 1.0f - std::exp (-kTwoPi * hz / sr); }
-
-//==============================================================================
-// Chords
-enum Chord { kChordOff = 0, kMin7, kMin9, kMin11, kMaj7, kMaj9, kSus, kNumChords };
-
-inline const std::vector<int>& chordIntervals (int c)
-{
-    static const std::vector<int> table[kNumChords] = {
-        { 0 }, { 0, 3, 7, 10 }, { 0, 3, 7, 10, 14 }, { 0, 3, 7, 10, 14, 17 },
-        { 0, 4, 7, 11 }, { 0, 4, 7, 11, 14 }, { 0, 5, 7, 10 } };
-    return table[std::clamp (c, 0, kNumChords - 1)];
-}
-
-//==============================================================================
-// User parameters
-struct Params
-{
-    int   piano  = 0;
-    float tone   = 0.5f;   // 0 dark .. 1 bright (0.5 = as designed)
-    float decay  = 0.5f;   // 0 short .. 1 long  (0.5 = as designed)
-    float width  = 0.6f;   // 0 mono .. 1 extra wide
-    float volumeDb = -3.0f;
-    int   chord  = kChordOff;
-
-    bool  filterOn = false; float cutoffHz = 3000.0f; float resonance = 0.2f;
-    bool  chorusOn = true;  float chorusMix = 0.3f;
-    bool  delayOn  = false; int delayTime = 2; float delayFeedback = 0.35f; float delayMix = 0.25f;
-    bool  reverbOn = true;  float reverbMix = 0.25f; float reverbSize = 0.5f;
-    bool  pumpOn   = false; float pumpDepth = 0.6f; int pumpRate = 0;
-};
-
-inline double delayBeats (int idx)
-{
-    static const double b[] = { 0.25, 0.5, 0.75, 1.0, 1.5, 2.0 };
-    return b[std::clamp (idx, 0, 5)];
-}
-
-//==============================================================================
-// Piano definitions
-struct AcousticDef
-{
-    float level    = 0.0f;
-    float hardness = 0.6f;   // hammer hardness: 0 felt .. 1 very bright
-    float strike   = 0.12f;  // strike position along the string (shapes the spectrum)
-    float decay    = 5.0f;   // seconds at middle C (key tracked)
-    float inharm   = 1.0f;   // inharmonicity scale
-    float detune   = 1.2f;   // string detune in cents (honky-tonk when high)
-    float damper   = 0.15f;  // release time when the key is lifted (s)
-    float hammer   = 0.4f;   // hammer noise amount
-};
-
-struct OrganDef
-{
-    float level = 0.0f;
-    std::array<float, 5> bars { 0, 1, 0, 0, 0 }; // 16', 8', 4', 2 2/3', 2'
-    float decay = 0.0f;      // 0 = sustains, otherwise decay time in seconds
-    float click = 0.3f;
-};
-
-struct FmDef
-{
-    float level = 0.0f;
-    float ratioA = 1, indexA = 1, susA = 0.2f, decA = 0.5f;    // body pair
-    float octB = 1, ratioB = 14, indexB = 1, decB = 0.06f, susB = 0; // tine / bite pair
-    float mixB = 0.5f;
-    float feedback = 0;
-    float decay = 3.0f, sustain = 0.0f;  // amp envelope
-    float bark = 0.0f;                   // velocity driven asymmetric drive (EP growl)
-};
-
-// Synth keys: harmonic additive tone with two detuned stereo copies.
-// Shaped after the classic UK house / garage organ-keys stabs.
-struct KeysDef
-{
-    float level = 0.0f;
-    float tilt = 0.5f;      // spectral tilt (amplitude ~ k^-tilt)
-    float kc = 20.0f;       // harmonic roll-off
-    float odd = 1.0f;       // boost for odd harmonics (hollow / organ quint)
-    float h2 = 1.0f, h3 = 1.0f;
-    float tau = 0.4f;       // decay of the bright attack part (s)
-    float bright = 0.3f;    // how much faster upper harmonics fade
-    float sus = 0.3f;       // level of the slow part
-    float tauS = 2.0f;      // decay of the slow part (s)
-    float detune = 10.0f;   // cents between the two copies
-    float spread = 0.4f;    // stereo spread of the copies
-    float attackMs = 5.0f;
-    float release = 0.05f;  // gate release (s)
-    float brightS = 0.0f;   // how much faster upper harmonics fade in the slow part
-};
-
-struct PianoDef
-{
-    const char* name;
-    const char* tag;          // short description for the UI
-    bool        energetic;
-    AcousticDef ac;
-    OrganDef    organ;
-    FmDef       fm;
-    KeysDef     keys;
-    Params      preset;       // what every control resets to when this piano is picked
-    float attackMs = 0.5f;
-    float release  = 0.25f;   // organ / FM release time (s)
-    float lowDb = 0, highDb = 0, drive = 0, glue = 0.3f, tape = 0, gainDb = 0;
-};
-
-enum PianoId
-{
-    kClassicHouse = 0, kRaveStab, kGarageBounce, kBigRoomGrand, kDiscoUpright, kPartyOrgan,
-    kGrandPiano, kSoftFelt, kDeepRhodes, kWurliDream, kLofiKeys, kGlassBells,
-    kUkGarageKeys, kDeepWideStab, kShortOrganStab,   // added in 2.1 (kept last so saved projects still match)
-    kNumPianos
-};
-
-inline const std::array<PianoDef, kNumPianos>& pianos()
-{
-    static const std::array<PianoDef, kNumPianos> defs = [] {
-        std::array<PianoDef, kNumPianos> d {};
-        auto def = [&d] (int id, const char* name, const char* tag, bool energetic) -> PianoDef&
-        {
-            d[(size_t) id] = PianoDef {};
-            d[(size_t) id].name = name; d[(size_t) id].tag = tag; d[(size_t) id].energetic = energetic;
-            d[(size_t) id].preset.piano = id;
-            return d[(size_t) id];
-        };
-
-        // ---------------- ENERGETIC ----------------
-        { auto& p = def (kClassicHouse, "Classic House", "90s house-piano", true);
-          { auto& q = p.preset; q.chorusMix = 0.25f; q.reverbMix = 0.2f; q.reverbSize = 0.45f; }
-          p.gainDb = 5.0f;
-          p.ac = { 0.85f, 0.88f, 0.11f, 2.2f, 1.6f, 2.5f, 0.12f, 0.35f };
-          p.organ.level = 0.40f; p.organ.bars = { 0.0f, 1.0f, 0.55f, 0.0f, 0.25f }; p.organ.decay = 2.2f; p.organ.click = 0.0f;
-          p.fm.level = 0.22f; p.fm.ratioA = 1; p.fm.indexA = 2.4f; p.fm.susA = 0.1f; p.fm.decA = 0.25f;
-          p.fm.mixB = 0.0f; p.fm.decay = 1.2f;
-          p.lowDb = 1.0f; p.highDb = 3.0f; p.drive = 0.30f; p.glue = 0.65f; }
-
-        { auto& p = def (kRaveStab, "Rave Stab", "Kort og hard", true);
-          { auto& q = p.preset; q.chorusMix = 0.2f; q.delayOn = true; q.delayTime = 2; q.delayFeedback = 0.3f; q.delayMix = 0.2f; q.reverbMix = 0.2f; }
-          p.gainDb = 6.0f;
-          p.ac = { 0.45f, 1.0f, 0.10f, 1.0f, 1.5f, 4.0f, 0.08f, 0.5f };
-          p.organ.level = 0.35f; p.organ.bars = { 0.6f, 1.0f, 0.4f, 0.0f, 0.0f }; p.organ.decay = 0.7f; p.organ.click = 0.2f;
-          p.fm.level = 0.75f; p.fm.ratioA = 1; p.fm.indexA = 3.4f; p.fm.susA = 0.15f; p.fm.decA = 0.22f;
-          p.fm.octB = 1; p.fm.ratioB = 2; p.fm.indexB = 2.5f; p.fm.decB = 0.15f; p.fm.susB = 0.1f; p.fm.mixB = 0.5f;
-          p.fm.feedback = 0.25f; p.fm.decay = 0.55f;
-          p.release = 0.12f; p.lowDb = 2.0f; p.highDb = 2.5f; p.drive = 0.55f; p.glue = 0.75f; }
-
-        { auto& p = def (kGarageBounce, "Garage Bounce", "Punchy med bite", true);
-          { auto& q = p.preset; q.chorusMix = 0.35f; q.reverbMix = 0.18f; q.reverbSize = 0.4f; }
-          p.gainDb = 5.0f;
-          p.ac = { 0.40f, 0.8f, 0.12f, 2.0f, 1.2f, 3.0f, 0.10f, 0.3f };
-          p.fm.level = 0.85f; p.fm.ratioA = 1; p.fm.indexA = 2.0f; p.fm.susA = 0.15f; p.fm.decA = 0.35f;
-          p.fm.octB = 1; p.fm.ratioB = 3; p.fm.indexB = 1.2f; p.fm.decB = 0.12f; p.fm.mixB = 0.35f;
-          p.fm.decay = 1.6f; p.fm.bark = 0.6f;
-          p.release = 0.15f; p.lowDb = 1.5f; p.highDb = 1.5f; p.drive = 0.35f; p.glue = 0.6f; }
-
-        { auto& p = def (kBigRoomGrand, "Big Room Grand", "Stort og lyst", true);
-          { auto& q = p.preset; q.width = 0.75f; q.chorusMix = 0.2f; q.reverbMix = 0.35f; q.reverbSize = 0.75f; }
-          p.gainDb = 4.0f;
-          p.ac = { 1.0f, 0.97f, 0.12f, 4.0f, 1.0f, 2.0f, 0.18f, 0.45f };
-          p.organ.level = 0.12f; p.organ.bars = { 0.0f, 1.0f, 0.5f, 0.0f, 0.0f }; p.organ.decay = 3.0f; p.organ.click = 0.0f;
-          p.lowDb = 2.5f; p.highDb = 4.0f; p.drive = 0.20f; p.glue = 0.65f; }
-
-        { auto& p = def (kDiscoUpright, "Disco Upright", "Honky-tonk groove", true);
-          { auto& q = p.preset; q.chorusMix = 0.15f; q.reverbMix = 0.2f; q.reverbSize = 0.4f; }
-          p.gainDb = 3.3f;
-          p.ac = { 1.0f, 0.78f, 0.10f, 2.6f, 1.4f, 9.0f, 0.12f, 0.5f };
-          p.lowDb = -1.0f; p.highDb = 2.0f; p.drive = 0.15f; p.glue = 0.5f; }
-
-        { auto& p = def (kPartyOrgan, "Party Organ", "Garage-orgel", true);
-          { auto& q = p.preset; q.chorusMix = 0.5f; q.reverbMix = 0.2f; q.reverbSize = 0.45f; }
-          p.gainDb = 1.5f;
-          p.organ.level = 1.0f; p.organ.bars = { 0.5f, 1.0f, 0.6f, 0.4f, 0.3f }; p.organ.decay = 0.0f; p.organ.click = 0.45f;
-          p.attackMs = 2.0f; p.release = 0.08f; p.lowDb = 1.0f; p.highDb = 1.0f; p.drive = 0.35f; p.glue = 0.45f; }
-
-        // ---------------- CALM ----------------
-        { auto& p = def (kGrandPiano, "Grand Piano", "Naturlig flygel", false);
-          { auto& q = p.preset; q.width = 0.7f; q.chorusOn = false; q.reverbMix = 0.3f; q.reverbSize = 0.65f; }
-          p.gainDb = -0.5f;
-          p.ac = { 1.0f, 0.60f, 0.12f, 7.0f, 1.0f, 1.0f, 0.25f, 0.30f };
-          p.lowDb = 1.0f; p.highDb = 0.0f; p.glue = 0.2f; }
-
-        { auto& p = def (kSoftFelt, "Soft Felt", "Mykt og intimt", false);
-          { auto& q = p.preset; q.chorusOn = false; q.reverbMix = 0.35f; q.reverbSize = 0.6f; }
-          p.gainDb = 3.0f;
-          p.ac = { 1.0f, 0.12f, 0.16f, 4.0f, 0.9f, 1.5f, 0.35f, 0.7f };
-          p.lowDb = 2.0f; p.highDb = -4.0f; p.glue = 0.3f; p.tape = 0.12f; }
-
-        { auto& p = def (kDeepRhodes, "Deep Rhodes", "Varm el-piano", false);
-          { auto& q = p.preset; q.chorusMix = 0.45f; q.reverbMix = 0.28f; q.reverbSize = 0.6f; }
-          p.gainDb = -0.5f;
-          p.fm.level = 1.0f; p.fm.ratioA = 1; p.fm.indexA = 1.3f; p.fm.susA = 0.25f; p.fm.decA = 1.2f;
-          p.fm.octB = 1; p.fm.ratioB = 14; p.fm.indexB = 1.6f; p.fm.decB = 0.06f; p.fm.mixB = 0.45f;
-          p.fm.decay = 4.5f; p.fm.bark = 0.35f;
-          p.attackMs = 1.0f; p.release = 0.35f; p.lowDb = 2.0f; p.highDb = -1.0f; p.drive = 0.10f; p.glue = 0.35f; }
-
-        { auto& p = def (kWurliDream, "Wurli Dream", "Drømmende reed-piano", false);
-          { auto& q = p.preset; q.chorusMix = 0.4f; q.delayOn = true; q.delayTime = 4; q.delayFeedback = 0.3f; q.delayMix = 0.18f; q.reverbMix = 0.35f; q.reverbSize = 0.7f; }
-          p.gainDb = 0.5f;
-          p.fm.level = 1.0f; p.fm.ratioA = 1; p.fm.indexA = 1.7f; p.fm.susA = 0.3f; p.fm.decA = 0.6f;
-          p.fm.octB = 1; p.fm.ratioB = 3; p.fm.indexB = 0.7f; p.fm.decB = 0.2f; p.fm.mixB = 0.3f;
-          p.fm.decay = 3.0f; p.fm.bark = 0.5f;
-          p.release = 0.3f; p.lowDb = 1.0f; p.highDb = -2.0f; p.drive = 0.2f; p.glue = 0.35f; p.tape = 0.35f; }
-
-        { auto& p = def (kLofiKeys, "Lo-fi Keys", "Støvete tape-piano", false);
-          { auto& q = p.preset; q.chorusMix = 0.3f; q.reverbMix = 0.3f; q.reverbSize = 0.55f; }
-          p.gainDb = 1.5f;
-          p.ac = { 1.0f, 0.45f, 0.13f, 3.5f, 1.2f, 4.0f, 0.25f, 0.5f };
-          p.lowDb = 2.0f; p.highDb = -5.0f; p.drive = 0.25f; p.glue = 0.45f; p.tape = 0.8f; }
-
-        { auto& p = def (kGlassBells, "Glass Bells", "Klokker og glitter", false);
-          { auto& q = p.preset; q.chorusMix = 0.3f; q.delayOn = true; q.delayTime = 3; q.delayFeedback = 0.4f; q.delayMix = 0.25f; q.reverbMix = 0.4f; q.reverbSize = 0.8f; }
-          p.gainDb = -0.5f;
-          p.ac = { 0.35f, 0.55f, 0.13f, 5.0f, 1.0f, 1.0f, 0.3f, 0.1f };
-          p.fm.level = 0.8f; p.fm.ratioA = 3.5f; p.fm.indexA = 1.4f; p.fm.susA = 0.3f; p.fm.decA = 1.5f;
-          p.fm.octB = 2; p.fm.ratioB = 1.41f; p.fm.indexB = 1.0f; p.fm.decB = 0.8f; p.fm.mixB = 0.4f;
-          p.fm.decay = 5.0f;
-          p.release = 0.6f; p.highDb = 1.0f; p.glue = 0.25f; }
-        // ---------------- ENERGETIC: UK house keys (shaped after reference stabs) ----------------
-        { auto& p = def (kUkGarageKeys, "UK Garage Keys", "Lys orgel-stab", true);
-          { auto& q = p.preset; q.width = 0.5f; q.chorusOn = false; q.reverbMix = 0.12f; q.reverbSize = 0.4f; }
-          p.keys = KeysDef { 1.0f, 0.698f, 26.0f, 3.00f, 2.10f, 2.75f, 0.046f, 0.127f, 0.604f, 0.466f, 11.4f, 0.36f, 7.5f, 0.022f, 0.034f };
-          p.attackMs = 7.5f; p.lowDb = 0.0f; p.highDb = -2.0f; p.drive = 0.10f; p.glue = 0.0f; p.gainDb = 5.5f; }
-
-        { auto& p = def (kDeepWideStab, "Deep Wide Stab", "Dyp og bred", true);
-          { auto& q = p.preset; q.width = 0.5f; q.chorusOn = false; q.reverbMix = 0.12f; q.reverbSize = 0.45f; }
-          p.keys = KeysDef { 1.0f, 0.510f, 40.0f, 1.82f, 0.59f, 0.30f, 0.162f, 0.0f, 0.68f, 1.839f, 22.9f, 0.68f, 0.8f, 0.030f, 0.681f };
-          p.attackMs = 0.8f; p.lowDb = 1.0f; p.highDb = -2.0f; p.drive = 0.17f; p.glue = 0.0f; p.gainDb = 6.5f; }
-
-        { auto& p = def (kShortOrganStab, "Short Organ Stab", "Kort og tett", true);
-          { auto& q = p.preset; q.width = 0.5f; q.chorusOn = false; q.reverbMix = 0.15f; q.reverbSize = 0.4f; }
-          p.keys = KeysDef { 1.0f, 0.232f, 12.0f, 2.20f, 1.67f, 0.98f, 0.073f, 0.937f, 0.95f, 0.478f, 21.9f, 0.20f, 1.0f, 0.065f, 0.195f };
-          p.attackMs = 1.0f; p.lowDb = 0.0f; p.highDb = -3.0f; p.drive = 0.55f; p.glue = 0.0f; p.gainDb = 7.5f; }
-        return d;
-    }();
-    return defs;
-}
-
-//==============================================================================
-struct Smoother
-{
-    float value = 0.0f, coef = 0.999f;
-    void  init (float v, double sr, float ms) { value = v; coef = std::exp (-1.0f / (float) (ms * 0.001 * sr)); }
-    float next (float target) { value = target + (value - target) * coef; return value; }
-};
-
-// Fractional-read delay line
-struct DelayLine
-{
-    std::vector<float> buf; int w = 0, len = 1;
-    void  init (int n) { len = std::max (4, n); buf.assign ((size_t) len, 0.0f); w = 0; }
-    void  push (float x) { buf[(size_t) w] = x; if (++w >= len) w = 0; }
-    float read (float d) const  // d samples behind the most recent push
-    {
-        float pos = (float) w - 1.0f - d;
-        while (pos < 0.0f) pos += (float) len;
-        int i0 = (int) pos; const float fr = pos - (float) i0;
-        if (i0 >= len) i0 -= len;
-        const int i1 = (i0 + 1 == len) ? 0 : i0 + 1;
-        return buf[(size_t) i0] + (buf[(size_t) i1] - buf[(size_t) i0]) * fr;
-    }
-};
-
-//==============================================================================
-// Lush 8-line feedback delay network reverb
-class FdnReverb
-{
-public:
-    void prepare (double sampleRate)
-    {
-        sr = (float) sampleRate;
-        static const float baseMs[8] = { 31.7f, 37.3f, 41.9f, 47.3f, 53.1f, 59.3f, 67.1f, 73.7f };
-        static const float apMs[4]   = { 4.77f, 3.59f, 12.73f, 9.30f };
-        for (int i = 0; i < 8; ++i) { base[i] = baseMs[i] * 0.001f * sr; lines[i].init ((int) (base[i] * 1.7f) + 64); lp[i] = 0; }
-        for (int i = 0; i < 4; ++i) { apLen[i] = (int) (apMs[i] * 0.001f * sr); ap[i].assign ((size_t) apLen[i], 0.0f); apW[i] = 0; }
-        pre.init ((int) (0.05f * sr));
-        lfo = 0.0;
-    }
-
-    void process (float inL, float inR, float size, float& outL, float& outR)
-    {
-        const float scale = 0.55f + 1.05f * size;
-        const float rt60  = 0.7f + 6.0f * size * size;
-        const float damp  = 0.42f - 0.15f * size;   // high-frequency damping
-
-        // input: predelay + diffusion
-        pre.push ((inL + inR) * 0.5f);
-        float x = pre.read (0.012f * sr);
-        for (int i = 0; i < 4; ++i)
-        {
-            float& slot = ap[i][(size_t) apW[i]];
-            const float y = slot - 0.6f * x;
-            slot = x + 0.6f * y;
-            if (++apW[i] >= apLen[i]) apW[i] = 0;
-            x = y;
-        }
-
-        lfo += 0.31 / sr; lfo -= std::floor (lfo);
-        const float m = std::sin (kTwoPi * (float) lfo) * 0.0006f * sr;
-
-        float v[8];
-        for (int i = 0; i < 8; ++i)
-        {
-            const float d = base[i] * scale + (i & 1 ? m : -m) * (i < 4 ? 1.0f : 0.5f);
-            const float o = lines[i].read (d);
-            lp[i] += (1.0f - damp) * (o - lp[i]);
-            const float g = std::pow (10.0f, -3.0f * (d / sr) / rt60);
-            v[i] = lp[i] * g;
-            out[i] = o;
-        }
-        hadamard8 (v);
-        for (int i = 0; i < 8; ++i) lines[i].push (v[i] + x * ((i & 1) ? -0.5f : 0.5f));
-
-        outL = (out[0] - out[2] + out[4] - out[6]) * 0.45f;
-        outR = (out[1] - out[3] + out[5] - out[7]) * 0.45f;
-    }
-
-private:
-    static void hadamard8 (float* v)
-    {
-        for (int h = 1; h < 8; h <<= 1)
-            for (int i = 0; i < 8; i += h << 1)
-                for (int j = i; j < i + h; ++j)
-                {
-                    const float a = v[j], b = v[j + h];
-                    v[j] = a + b; v[j + h] = a - b;
-                }
-        for (int i = 0; i < 8; ++i) v[i] *= 0.35355339f;
-    }
-
-    float sr = 44100.0f;
-    DelayLine lines[8], pre;
-    float base[8] {}, lp[8] {}, out[8] {};
-    std::vector<float> ap[4]; int apLen[4] {}, apW[4] {};
-    double lfo = 0;
-};
-
-//==============================================================================
 class Engine
 {
 public:
-    static constexpr int kMaxVoices   = 40;
-    static constexpr int kMaxPartials = 40;
+    static constexpr int kMaxVoices    = 64;
+    static constexpr int kMaxPartials  = 40;
     static constexpr int kBeatPartials = 8;
+    static constexpr int kMaxUnison    = 7;
+    static constexpr int kRelVoices    = 16;
 
     void prepare (double sampleRate, int maxBlock)
     {
@@ -376,10 +27,14 @@ public:
         mono.assign ((size_t) block, 0.0f);
         side.assign ((size_t) block, 0.0f);
         voices = {};
+        relVoices = {};
         reverb.prepare (sr);
+        air.prepare (fs);
         chorusLine.init ((int) (0.05 * sr));
         tapeL.init ((int) (0.03 * sr)); tapeR.init ((int) (0.03 * sr));
         delayL.init ((int) (3.2 * sr)); delayR.init ((int) (3.2 * sr));
+        for (auto* f : { &lowCutL, &lowCutR, &filtL, &filtR, &sideHp }) f->reset();
+        sat = {};
         resetState();
         needsSnap = true;
     }
@@ -387,10 +42,30 @@ public:
     void setParams (const Params& np) { p = np; }
     const Params& params() const { return p; }
 
+    // The bank must stay alive while the engine uses it (the loader keeps it for the app's lifetime).
+    void setSampleBank (const SampleBank* b) { bank = (b != nullptr && ! b->empty()) ? b : nullptr; }
+    bool hasSamples() const { return bank != nullptr; }
+
     //--------------------------------------------------------------------------
     void noteOn (int note, float velocity)
     {
         noteOffInternal (note, true);
+        const SoundDef& d = cur();
+        if (d.mono && p.chord == kChordOff)
+        {
+            // mono legato: keep the oscillators running and only retrigger the envelopes -> no clicks
+            Voice* held = nullptr;
+            for (auto& v : voices)
+                if (v.active && ! v.released && v.sound == p.sound && v.vaOn && (held == nullptr || v.order > held->order))
+                    held = &v;
+            for (auto& v : voices)
+                if (v.active && &v != held && ! v.fastRelease) { v.fastRelease = true; v.released = true; }
+            if (held != nullptr) { retrigger (*held, note, clamp01 (velocity)); return; }
+        }
+        else if (d.mono)
+            for (auto& v : voices)
+                if (v.active && ! v.fastRelease) { v.fastRelease = true; v.released = true; }
+
         const auto& iv = chordIntervals (p.chord);
         const float norm = 1.0f / std::sqrt ((float) iv.size());
         for (size_t k = 0; k < iv.size(); ++k)
@@ -417,8 +92,7 @@ public:
         for (auto& v : voices) if (v.active) { v.sustained = false; releaseVoice (v); }
     }
 
-    // bpm / ppq / playing come from the host. When stopped, tempo effects run
-    // on an internal clock at the host tempo.
+    // bpm / ppq / playing come from the host; when stopped, tempo effects use an internal clock.
     void process (float* outL, float* outR, int numSamples, double bpm, double ppqStart, bool playing)
     {
         int done = 0;
@@ -438,48 +112,65 @@ private:
     //==========================================================================
     struct Partial
     {
-        float re, im, c, s;      // main oscillator (rotating phasor)
-        float re2, im2, c2, s2;  // detuned second string (low partials only)
-        float e1, e2, d1, d2;    // prompt / aftersound envelopes and decay coefficients
-        float rel;               // damper coefficient used after release
+        float re, im, c, s, re2, im2, c2, s2, e1, e2, d1, d2;
         bool  beat, on;
     };
 
     struct Voice
     {
-        bool active = false, sustained = false, released = false;
-        int note = -1, trigger = -1, piano = 0;
+        bool active = false, sustained = false, released = false, fastRelease = false;
+        int note = -1, trigger = -1, sound = 0;
         uint64_t order = 0;
-        float vel = 0, gain = 1, panAc = 0;
-        float age = 0;
+        float vel = 0, gain = 1;
 
-        // acoustic
-        int numPartials = 0;
-        std::array<Partial, kMaxPartials> part {};
+        // master amplitude envelope (Attack / Release controls)
+        float env = 0, attInc = 1;
+        float extraDecay = 1.0f, extra = 1.0f;     // Decay control on samples
+
+        // sampler
+        const SampleZone* za = nullptr;
+        float smpGain = 0;
+        double pos = 0, inc = 1;
+        bool undamped = false;
+
+        // acoustic (fallback) and keys
+        int numPartials = 0, numKeys = 0;
+        std::array<Partial, kMaxPartials> part {}, keys {};
         float hamEnv = 0, hamB1 = 0, hamB2 = 0, hamA = 0, hamR = 0, hamGain = 0;
-        uint32_t rng = 1;
-
-        // synth keys (two detuned copies per harmonic: re/im = copy A, re2/im2 = copy B)
-        int numKeys = 0;
-        std::array<Partial, kMaxPartials> keys {};
+        Rng rng;
 
         // organ
         std::array<float, 5> orRe {}, orIm {}, orC {}, orS {};
-        float orAmp = 0, orDecay = 1, orRel = 1, orClick = 0;
+        float orAmp = 0, orDecay = 1, orClick = 0;
 
         // fm
         double ph[4] {};
         float fmAmp = 0, fmIdxA = 1, fmIdxB = 1, fbState = 0;
-        int fmStage = 0;
+        bool fmOn = false;
 
-        float attack = 1.0f, attackInc = 1.0f;
+        // va
+        bool vaOn = false;
+        int uni = 1;
+        float vph[2][kMaxUnison] {}, vinc[2][kMaxUnison] {}, vpan[kMaxUnison] {};
+        float subPh = 0, subInc = 0;
+        Svf vf[2][2];
+        float fenv = 0, vamp = 1, driftPh = 0, driftInc = 0, driftAmt = 0;
+        int fStage = 0, cutCounter = 0;
+        bool ampRise = false;
     };
+
+    struct RelVoice { const SampleZone* z = nullptr; double pos = 0, inc = 1; float gain = 0; };
+
+    const SoundDef& cur() const { return sounds()[(size_t) std::clamp (p.sound, 0, kNumSounds - 1)]; }
+    static float noteHz (int n) { return 440.0f * std::pow (2.0f, (n - 69) / 12.0f); }
+    float decayScale() const { return std::pow (2.0f, (p.decay - 0.5f) * 4.0f); }   // 0.25x .. 4x
+    float toneOffset() const { return (p.tone - 0.5f) * 2.0f; }                      // -1 .. +1
 
     //--------------------------------------------------------------------------
     void resetState()
     {
-        for (float* f : { &loL, &loR, &hiL, &hiR, &ic1L, &ic2L, &ic1R, &ic2R, &compEnv, &tapeLpL, &tapeLpR,
-                          &hissLp, &dlFbL, &dlFbR, &dlHpL, &dlHpR, &dcL, &dcR, &dcInL, &dcInR })
+        for (float* f : { &loL, &loR, &hiL, &hiR, &compEnv, &tapeLpL, &tapeLpR, &hissLp, &dlFbL, &dlFbR,
+                          &dlHpL, &dlHpR, &dcL, &dcR, &dcInL, &dcInR })
             *f = 0.0f;
         wowPh = flutterPh = chPh = freePpq = 0.0;
     }
@@ -506,34 +197,51 @@ private:
         return *best;
     }
 
-    static float noteHz (int n) { return 440.0f * std::pow (2.0f, (n - 69) / 12.0f); }
-
-    float decayScale() const { return std::pow (2.0f, (p.decay - 0.5f) * 4.0f); }       // 0.25x .. 4x
-    float toneOffset() const { return (p.tone - 0.5f) * 2.0f; }                          // -1 .. +1
-
     //--------------------------------------------------------------------------
     void startVoice (Voice& v, int pitch, int trigger, float vel, float gain)
     {
-        const PianoDef& d = pianos()[(size_t) std::clamp (p.piano, 0, kNumPianos - 1)];
+        const SoundDef& d = cur();
         v = Voice {};
-        v.active = true; v.note = pitch; v.trigger = trigger; v.piano = p.piano;
+        v.active = true; v.note = pitch; v.trigger = trigger; v.sound = p.sound;
         v.order = ++counter; v.vel = vel; v.gain = gain;
-        v.rng = 0x9E3779B9u ^ (uint32_t) (counter * 2654435761u);
-        v.attack = 0.0f;   // short ramp avoids clicks (partials start at random phases)
-        v.attackInc = 1.0f / (std::max (0.8f, d.attackMs) * 0.001f * fs);
+        v.rng.s = 0x9E3779B9u ^ (uint32_t) (counter * 2654435761u);
+        v.attInc = 1.0f / (std::max (0.3f, p.attackMs) * 0.001f * fs);
+
+        // Decay control on recorded samples: below 50 % it adds an extra fade
+        if (p.decay < 0.5f)
+        {
+            const float T = 0.12f * std::pow (40.0f, p.decay * 2.0f);
+            v.extraDecay = std::exp (-1.0f / (T * fs));
+        }
 
         const float f  = noteHz (pitch);
         const float ds = decayScale();
-        const float kt = std::clamp (std::pow (2.0f, -(pitch - 60) / 18.0f), 0.12f, 3.0f); // key tracked decay
-        v.panAc = std::clamp ((pitch - 64) / 40.0f, -1.0f, 1.0f) * 0.35f;
+        const float kt = std::clamp (std::pow (2.0f, -(pitch - 60) / 18.0f), 0.12f, 3.0f);
 
-        // ---- acoustic: additive partials
-        if (d.ac.level > 0.0f)
+        //---- sampler (or modelled fallback while samples load)
+        if (d.sampler.level > 0.0f && bank != nullptr)
         {
-            const AcousticDef& a = d.ac;
+            const int ri = bank->rootIndexFor (pitch);
+            const float x = std::pow (vel, d.sampler.velCurve);
+            const int layer = std::clamp ((int) (x * (float) bank->numLayers), 0, bank->numLayers - 1);
+            v.za = bank->zone (ri, layer);
+            if (v.za != nullptr)
+            {
+                v.inc = std::pow (2.0, (pitch - v.za->root) / 12.0) * v.za->sampleRate / sr;
+                // layers are level-matched, so loudness follows velocity smoothly over the whole range
+                v.smpGain = d.sampler.level * v.za->gain * dbToGain (d.sampler.dynamics * (std::sqrt (vel) - 1.0f));
+            }
+            v.undamped = pitch >= 89;   // the top strings of a grand have no dampers
+        }
+        const bool useFallback = d.sampler.level > 0.0f && bank == nullptr && d.fallback.level > 0.0f;
+        const AcousticDef* ac = useFallback ? &d.fallback : nullptr;
+
+        if (ac != nullptr)
+        {
+            const AcousticDef& a = *ac;
             const float hard = clamp01 (a.hardness + 0.3f * toneOffset()) * (0.55f + 0.45f * vel);
             const float B    = std::clamp (0.00012f * std::exp ((pitch - 48) * 0.055f) * a.inharm, 0.00002f, 0.02f);
-            const float kc   = 2.5f + 34.0f * hard * hard;                 // spectral roll-off
+            const float kc   = 2.5f + 34.0f * hard * hard;
             const float tau  = a.decay * kt * ds;
             const float detR = std::pow (2.0f, a.detune / 1200.0f);
             float norm = 0.0f;
@@ -548,44 +256,35 @@ private:
                 Partial& pt = v.part[(size_t) n++];
                 const float w = kTwoPi * fk / fs;
                 pt.c = std::cos (w); pt.s = std::sin (w);
-                const float ph0 = 2.39996f * (float) (k * k);   // spread phases: no buzzy pulse at the attack
+                const float ph0 = 2.39996f * (float) (k * k);
                 pt.re = std::cos (ph0); pt.im = std::sin (ph0);
                 pt.beat = k <= kBeatPartials && a.detune > 0.05f;
                 const float w2 = w * (k % 2 ? detR : 1.0f / detR);
                 pt.c2 = std::cos (w2); pt.s2 = std::sin (w2);
                 pt.re2 = std::cos (ph0 + 1.3f * (float) k); pt.im2 = std::sin (ph0 + 1.3f * (float) k);
                 const float tk = tau / (1.0f + 0.045f * std::pow ((float) (k - 1), 1.35f) * (0.6f + hard));
-                pt.d1 = std::exp (-1.0f / (std::max (0.02f, tk * 0.22f) * fs));  // prompt sound
-                pt.d2 = std::exp (-1.0f / (std::max (0.04f, tk * 1.4f) * fs));   // aftersound
-                pt.e1 = amp * 0.65f;
-                pt.e2 = amp * 0.35f;
-                const float relT = a.damper / (1.0f + 0.15f * (float) (k - 1)) * (pitch > 88 ? 6.0f : 1.0f);
-                pt.rel = std::exp (-1.0f / (std::max (0.01f, relT) * fs));
+                pt.d1 = std::exp (-1.0f / (std::max (0.02f, tk * 0.22f) * fs));
+                pt.d2 = std::exp (-1.0f / (std::max (0.04f, tk * 1.4f) * fs));
+                pt.e1 = amp * 0.65f; pt.e2 = amp * 0.35f;
                 pt.on = true;
                 norm += amp;
             }
             v.numPartials = n;
-            const float lvl = a.level * (0.35f + 0.65f * vel) * 1.6f / std::max (1.0f, std::sqrt (norm) * 1.3f);
+            const float lvl = a.level * (0.35f + 0.65f * vel) * 0.8f / std::max (1.0f, std::sqrt (norm) * 1.3f);
             for (int i = 0; i < n; ++i) { v.part[(size_t) i].e1 *= lvl; v.part[(size_t) i].e2 *= lvl; }
-
-            // hammer noise: band-passed burst
             const float fc = std::clamp (f * (1.5f + 4.0f * hard), 300.0f, 6000.0f);
-            const float bw = 0.7f;
-            const float rr = std::exp (-kPi * bw * fc / fs);
-            v.hamA = 2.0f * rr * std::cos (kTwoPi * fc / fs);
-            v.hamR = rr * rr;
+            const float rr = std::exp (-kPi * 0.7f * fc / fs);
+            v.hamA = 2.0f * rr * std::cos (kTwoPi * fc / fs); v.hamR = rr * rr;
             v.hamEnv = 1.0f;
-            v.hamGain = a.hammer * a.level * (0.15f + 0.85f * vel) * (0.25f + 0.75f * hard) * 0.12f;
+            v.hamGain = a.hammer * a.level * (0.15f + 0.85f * vel) * (0.25f + 0.75f * hard) * 0.06f;
         }
 
-        // ---- synth keys
+        //---- keys
         if (d.keys.level > 0.0f)
         {
             const KeysDef& kd = d.keys;
             const float kc   = kd.kc * std::pow (2.0f, toneOffset()) * (0.7f + 0.3f * vel);
-            const float kts  = 1.0f;   // no key tracking: matches the reference stabs
             const float detR = std::pow (2.0f, kd.detune / 2400.0f);
-            const float rel  = std::exp (-1.0f / (std::max (0.005f, kd.release) * 0.3f * fs));
             float norm = 0.0f;
             int n = 0;
             for (int k = 1; k <= kMaxPartials; ++k)
@@ -602,12 +301,10 @@ private:
                 const float ph1 = 2.39996f * (float) (k * k + 3), ph2 = ph1 + 1.7f * (float) k;
                 pt.c = std::cos (w1);  pt.s = std::sin (w1);  pt.re = std::cos (ph1);  pt.im = std::sin (ph1);
                 pt.c2 = std::cos (w2); pt.s2 = std::sin (w2); pt.re2 = std::cos (ph2); pt.im2 = std::sin (ph2);
-                const float tk = kd.tau * ds * kts / (1.0f + kd.bright * (float) (k - 1));
+                const float tk = kd.tau * ds / (1.0f + kd.bright * (float) (k - 1));
                 pt.d1 = std::exp (-1.0f / (std::max (0.01f, tk) * fs));
-                pt.d2 = std::exp (-1.0f / (std::max (0.02f, kd.tauS * ds * kts / (1.0f + kd.brightS * (float) (k - 1))) * fs));
-                pt.e1 = a * (1.0f - kd.sus);
-                pt.e2 = a * kd.sus;
-                pt.rel = rel;
+                pt.d2 = std::exp (-1.0f / (std::max (0.02f, kd.tauS * ds / (1.0f + kd.brightS * (float) (k - 1))) * fs));
+                pt.e1 = a * (1.0f - kd.sus); pt.e2 = a * kd.sus;
                 pt.beat = true; pt.on = true;
                 norm += a;
             }
@@ -616,7 +313,7 @@ private:
             for (int i = 0; i < n; ++i) { v.keys[(size_t) i].e1 *= lvl; v.keys[(size_t) i].e2 *= lvl; }
         }
 
-        // ---- organ
+        //---- organ
         if (d.organ.level > 0.0f)
         {
             static const float mult[5] = { 0.5f, 1.0f, 2.0f, 3.0f, 4.0f };
@@ -628,52 +325,135 @@ private:
             }
             v.orAmp = d.organ.level * (0.6f + 0.4f * vel);
             v.orDecay = d.organ.decay > 0.0f ? std::exp (-1.0f / (d.organ.decay * kt * ds * 0.35f * fs)) : 1.0f;
-            v.orRel = std::exp (-1.0f / (std::max (0.01f, d.release) * 0.3f * fs));
             v.orClick = d.organ.click * d.organ.level * 0.25f;
         }
 
-        // ---- fm
-        if (d.fm.level > 0.0f)
+        //---- fm
+        if (d.fm.level > 0.0f) { v.fmOn = true; v.fmAmp = d.fm.level; }
+
+        //---- va
+        if (d.va.level > 0.0f)
         {
-            v.fmAmp = d.fm.level;
-            v.fmIdxA = 1.0f; v.fmIdxB = 1.0f; v.fmStage = 0;
+            const VaDef& va = d.va;
+            v.vaOn = true;
+            v.uni = std::clamp (va.unison, 1, kMaxUnison);
+            for (int u = 0; u < v.uni; ++u)
+            {
+                const float t = v.uni > 1 ? (float) u / (float) (v.uni - 1) * 2.0f - 1.0f : 0.0f;  // -1..1
+                const float cents = 0.5f * va.detune * t;
+                v.vpan[u] = t * va.spread;
+                v.vinc[0][u] = f * std::pow (2.0f, cents / 1200.0f) / fs;
+                v.vinc[1][u] = f * std::pow (2.0f, (va.semi2 * 100.0f + va.fine2 + cents * 1.1f) / 1200.0f) / fs;
+                // mono (bass) sounds start each waveform at its zero crossing -> clean, click-free starts
+                static const float zeroPh[4] = { 0.5f, 0.0f, 0.25f, 0.0f };   // saw, square, tri, sine
+                v.vph[0][u] = d.mono ? zeroPh[va.wave1] : 0.5f + 0.5f * v.rng.next();
+                v.vph[1][u] = d.mono ? zeroPh[va.wave2] : 0.5f + 0.5f * v.rng.next();
+            }
+            v.subInc = 0.5f * f / fs;
+            v.driftInc = (0.12f + 0.2f * (0.5f + 0.5f * v.rng.next())) / fs;   // 0.12-0.32 Hz, different per voice
+            v.driftPh = 0.5f + 0.5f * v.rng.next();
+            v.driftAmt = va.drift;
+            v.fenv = 0.0f; v.fStage = 0; v.vamp = 1.0f;
+            for (auto& ch : v.vf) for (auto& st : ch) st.reset();
         }
-        (void) ds;
+    }
+
+    void retrigger (Voice& v, int note, float vel)
+    {
+        const float f = noteHz (note);
+        const VaDef& va = sounds()[(size_t) v.sound].va;
+        for (int u = 0; u < v.uni; ++u)
+        {
+            const float t = v.uni > 1 ? (float) u / (float) (v.uni - 1) * 2.0f - 1.0f : 0.0f;
+            const float cents = 0.5f * va.detune * t;
+            v.vinc[0][u] = f * std::pow (2.0f, cents / 1200.0f) / fs;
+            v.vinc[1][u] = f * std::pow (2.0f, (va.semi2 * 100.0f + va.fine2 + cents * 1.1f) / 1200.0f) / fs;
+        }
+        v.subInc = 0.5f * f / fs;
+        v.note = note; v.trigger = note; v.vel = vel; v.order = ++counter;
+        v.fStage = 0; v.ampRise = true;
     }
 
     void releaseVoice (Voice& v)
     {
         if (v.released) return;
         v.released = true;
-        for (int i = 0; i < v.numPartials; ++i)
-        {
-            Partial& pt = v.part[(size_t) i];
-            pt.d1 = std::min (pt.d1, pt.rel);
-            pt.d2 = std::min (pt.d2, pt.rel);
-        }
-        for (int i = 0; i < v.numKeys; ++i)
-        {
-            Partial& pt = v.keys[(size_t) i];
-            pt.d1 = std::min (pt.d1, pt.rel);
-            pt.d2 = std::min (pt.d2, pt.rel);
-        }
-        v.fmStage = 2;
+        const SoundDef& d = sounds()[(size_t) v.sound];
+        // damper noise
+        if (bank != nullptr && v.za != nullptr && d.sampler.relNoise > 0.0f)
+            if (const SampleZone* z = bank->release (v.note))
+                for (auto& r : relVoices)
+                    if (r.z == nullptr)
+                    {
+                        r.z = z; r.pos = 0; r.inc = z->sampleRate / sr;
+                        r.gain = d.sampler.relNoise * d.sampler.level * 0.5f * (0.3f + 0.7f * v.vel) * v.env;
+                        break;
+                    }
     }
 
     //--------------------------------------------------------------------------
+    static inline float hermite (float xm1, float x0, float x1, float x2, float t)
+    {
+        const float c = (x1 - xm1) * 0.5f, v = x0 - x1, w = c + v, a = w + v + (x2 - x0) * 0.5f, b = w + a;
+        return ((a * t - b) * t + c) * t + x0;
+    }
+
+    static inline float polyBlep (float t, float dt)
+    {
+        if (t < dt) { t /= dt; return t + t - t * t - 1.0f; }
+        if (t > 1.0f - dt) { t = (t - 1.0f) / dt; return t * t + t + t + 1.0f; }
+        return 0.0f;
+    }
+
+    static inline float osc (int wave, float t, float dt)
+    {
+        switch (wave)
+        {
+            case kSaw:    return 2.0f * t - 1.0f - polyBlep (t, dt);
+            case kSquare: { float t2 = t + 0.5f; if (t2 >= 1.0f) t2 -= 1.0f;
+                            return (t < 0.5f ? 1.0f : -1.0f) + polyBlep (t, dt) - polyBlep (t2, dt); }
+            case kTri:    return 1.0f - 4.0f * std::abs (t - 0.5f);
+            default:      return std::sin (kTwoPi * t);
+        }
+    }
+
     void renderVoice (Voice& v, float* L, float* R, int n)
     {
-        const PianoDef& d = pianos()[(size_t) v.piano];
+        const SoundDef& d = sounds()[(size_t) v.sound];
         std::fill (mono.begin(), mono.begin() + n, 0.0f);
         std::fill (side.begin(), side.begin() + n, 0.0f);
         float* out = mono.data();
         float* sd  = side.data();
         bool alive = false;
 
-        // ---- synth keys (stereo: the two detuned copies are spread left/right)
+        //---- sampler (stereo)
+        if (v.za != nullptr)
+        {
+            const SampleZone& a = *v.za;
+            const float ga = v.smpGain;
+            double pos = v.pos;
+            float ex = v.extra;
+            for (int i = 0; i < n; ++i)
+            {
+                const int ip = (int) pos;
+                const float t = (float) (pos - ip);
+                if (ip + 2 >= a.length) { v.za = nullptr; break; }
+                const int i0 = std::max (0, ip - 1);
+                float l = hermite (a.l (i0), a.l (ip), a.l (ip + 1), a.l (ip + 2), t) * ga;
+                float r = hermite (a.r (i0), a.r (ip), a.r (ip + 1), a.r (ip + 2), t) * ga;
+                l *= ex; r *= ex; ex *= v.extraDecay;
+                out[i] += 0.5f * (l + r);
+                sd[i]  += 0.5f * (l - r);
+                pos += v.inc;
+            }
+            v.pos = pos; v.extra = ex;
+            if (v.za != nullptr && ex > 1.0e-4f) alive = true; else v.za = nullptr;
+        }
+
+        //---- keys
         if (v.numKeys > 0)
         {
-            const float sp = d.keys.spread * std::clamp (p.width * 2.0f, 0.0f, 1.5f);   // width 50 % = as designed
+            const float sp = d.keys.spread * std::clamp (p.width * 2.0f, 0.0f, 1.5f);
             for (int k = 0; k < v.numKeys; ++k)
             {
                 Partial& pt = v.keys[(size_t) k];
@@ -682,11 +462,10 @@ private:
                 const float c = pt.c, s = pt.s, c2 = pt.c2, s2 = pt.s2, d1 = pt.d1, d2 = pt.d2;
                 for (int i = 0; i < n; ++i)
                 {
-                    const float e = e1 + e2;
-                    const float a = im * e, b = im2 * e;
-                    out[i] += (a + b) * 0.5f;
-                    sd[i]  += (a - b) * 0.5f * sp;
-                    const float nr = re * c - im * s;     im = re * s + im * c;     re = nr;
+                    const float e = e1 + e2, aa = im * e, bb = im2 * e;
+                    out[i] += (aa + bb) * 0.5f;
+                    sd[i]  += (aa - bb) * 0.5f * sp;
+                    const float nr = re * c - im * s;      im = re * s + im * c;      re = nr;
                     const float nr2 = re2 * c2 - im2 * s2; im2 = re2 * s2 + im2 * c2; re2 = nr2;
                     e1 *= d1; e2 *= d2;
                 }
@@ -696,51 +475,32 @@ private:
             }
         }
 
-        // ---- acoustic
+        //---- acoustic fallback
         if (v.numPartials > 0)
         {
             for (int k = 0; k < v.numPartials; ++k)
             {
                 Partial& pt = v.part[(size_t) k];
                 if (! pt.on) continue;
-                float re = pt.re, im = pt.im, e1 = pt.e1, e2 = pt.e2;
-                const float c = pt.c, s = pt.s, d1 = pt.d1, d2 = pt.d2;
-                if (pt.beat)
+                float re = pt.re, im = pt.im, e1 = pt.e1, e2 = pt.e2, re2 = pt.re2, im2 = pt.im2;
+                const float c = pt.c, s = pt.s, d1 = pt.d1, d2 = pt.d2, c2 = pt.c2, s2 = pt.s2;
+                for (int i = 0; i < n; ++i)
                 {
-                    float re2 = pt.re2, im2 = pt.im2;
-                    const float c2 = pt.c2, s2 = pt.s2;
-                    for (int i = 0; i < n; ++i)
-                    {
-                        out[i] += im * e1 + im2 * e2;
-                        const float nr = re * c - im * s;  im = re * s + im * c;  re = nr;
-                        const float nr2 = re2 * c2 - im2 * s2; im2 = re2 * s2 + im2 * c2; re2 = nr2;
-                        e1 *= d1; e2 *= d2;
-                    }
-                    const float g2 = 1.5f - 0.5f * (re2 * re2 + im2 * im2);
-                    pt.re2 = re2 * g2; pt.im2 = im2 * g2;
+                    out[i] += pt.beat ? im * e1 + im2 * e2 : im * (e1 + e2);
+                    const float nr = re * c - im * s; im = re * s + im * c; re = nr;
+                    if (pt.beat) { const float nr2 = re2 * c2 - im2 * s2; im2 = re2 * s2 + im2 * c2; re2 = nr2; }
+                    e1 *= d1; e2 *= d2;
                 }
-                else
-                {
-                    for (int i = 0; i < n; ++i)
-                    {
-                        out[i] += im * (e1 + e2);
-                        const float nr = re * c - im * s; im = re * s + im * c; re = nr;
-                        e1 *= d1; e2 *= d2;
-                    }
-                }
-                const float g = 1.5f - 0.5f * (re * re + im * im);
-                pt.re = re * g; pt.im = im * g; pt.e1 = e1; pt.e2 = e2;
+                const float g = 1.5f - 0.5f * (re * re + im * im), g2 = 1.5f - 0.5f * (re2 * re2 + im2 * im2);
+                pt.re = re * g; pt.im = im * g; pt.re2 = re2 * g2; pt.im2 = im2 * g2; pt.e1 = e1; pt.e2 = e2;
                 if (e1 + e2 < 1.0e-5f) pt.on = false; else alive = true;
             }
-
             if (v.hamEnv > 1.0e-4f)
             {
                 const float hd = std::exp (-1.0f / (0.006f * fs));
                 for (int i = 0; i < n; ++i)
                 {
-                    v.rng = v.rng * 1664525u + 1013904223u;
-                    const float noise = ((float) (v.rng >> 9) * (1.0f / 8388608.0f)) * 2.0f - 1.0f;
-                    const float y = noise * (1.0f - v.hamR) + v.hamA * v.hamB1 - v.hamR * v.hamB2;
+                    const float y = v.rng.next() * (1.0f - v.hamR) + v.hamA * v.hamB1 - v.hamR * v.hamB2;
                     v.hamB2 = v.hamB1; v.hamB1 = y;
                     out[i] += y * v.hamEnv * v.hamGain;
                     v.hamEnv *= hd;
@@ -749,48 +509,41 @@ private:
             }
         }
 
-        // ---- organ
+        //---- organ
         if (v.orAmp > 1.0e-5f)
         {
             const auto& bars = d.organ.bars;
-            const float dec = v.released ? v.orRel : v.orDecay;
             float amp = v.orAmp;
             for (int i = 0; i < n; ++i)
             {
                 float s = 0.0f;
-                for (size_t b = 0; b < 5; ++b)
+                for (size_t bi = 0; bi < 5; ++bi)
                 {
-                    if (bars[b] <= 0.0f) continue;
-                    s += v.orIm[b] * bars[b];
-                    const float nr = v.orRe[b] * v.orC[b] - v.orIm[b] * v.orS[b];
-                    v.orIm[b] = v.orRe[b] * v.orS[b] + v.orIm[b] * v.orC[b];
-                    v.orRe[b] = nr;
+                    if (bars[bi] <= 0.0f) continue;
+                    s += v.orIm[bi] * bars[bi];
+                    const float nr = v.orRe[bi] * v.orC[bi] - v.orIm[bi] * v.orS[bi];
+                    v.orIm[bi] = v.orRe[bi] * v.orS[bi] + v.orIm[bi] * v.orC[bi];
+                    v.orRe[bi] = nr;
                 }
                 out[i] += s * amp * 0.38f;
-                amp *= dec;
+                amp *= v.orDecay;
             }
-            for (size_t b = 0; b < 5; ++b)
+            for (size_t bi = 0; bi < 5; ++bi)
             {
-                const float g = 1.5f - 0.5f * (v.orRe[b] * v.orRe[b] + v.orIm[b] * v.orIm[b]);
-                v.orRe[b] *= g; v.orIm[b] *= g;
+                const float g = 1.5f - 0.5f * (v.orRe[bi] * v.orRe[bi] + v.orIm[bi] * v.orIm[bi]);
+                v.orRe[bi] *= g; v.orIm[bi] *= g;
             }
             if (v.orClick > 1.0e-4f)
             {
                 const float cd = std::exp (-1.0f / (0.003f * fs));
-                for (int i = 0; i < n; ++i)
-                {
-                    v.rng = v.rng * 1664525u + 1013904223u;
-                    const float noise = ((float) (v.rng >> 9) * (1.0f / 8388608.0f)) * 2.0f - 1.0f;
-                    out[i] += noise * v.orClick;
-                    v.orClick *= cd;
-                }
+                for (int i = 0; i < n; ++i) { out[i] += v.rng.next() * v.orClick; v.orClick *= cd; }
             }
             v.orAmp = amp;
             alive = alive || amp > 1.0e-5f;
         }
 
-        // ---- fm
-        if (v.fmAmp > 1.0e-5f)
+        //---- fm
+        if (v.fmOn)
         {
             const FmDef& m = d.fm;
             const float kt   = std::clamp (std::pow (2.0f, -(v.note - 60) / 24.0f), 0.25f, 2.5f);
@@ -798,21 +551,17 @@ private:
             const float bright = std::max (0.15f, 1.0f + 0.6f * toneOffset());
             const float velI = 0.45f + 0.55f * v.vel;
             const float peakA = m.indexA * bright * velI * idxK, peakB = m.indexB * bright * velI * idxK;
-            const float ds = decayScale();
-            const float decC = std::exp (-1.0f / (std::max (0.02f, m.decay * kt * ds) * fs * 0.3f));
-            const float relC = std::exp (-1.0f / (std::max (0.01f, d.release) * fs * 0.25f));
+            const float decC = std::exp (-1.0f / (std::max (0.02f, m.decay * kt * decayScale()) * fs * 0.3f));
             const float iCA = std::exp (-1.0f / (m.decA * kt * fs)), iCB = std::exp (-1.0f / (m.decB * kt * fs));
             const double f0 = noteHz (v.note) / sr;
             const double inc[4] = { f0, f0 * m.ratioA, f0 * m.octB, f0 * m.octB * m.ratioB };
             const float barkDrive = 1.0f + 4.0f * m.bark * v.vel * v.vel;
             const float lvl = (0.35f + 0.65f * v.vel) * 0.8f;
+            const float susL = m.sustain * m.level;
             float amp = v.fmAmp;
             for (int i = 0; i < n; ++i)
             {
-                if (v.fmStage == 0) { v.fmStage = 1; }
-                else if (v.fmStage == 1) amp = m.sustain * m.level + (amp - m.sustain * m.level) * decC;
-                else amp *= relC;
-
+                amp = susL + (amp - susL) * decC;
                 const float iA = peakA * (m.susA + (1.0f - m.susA) * v.fmIdxA);
                 const float iB = peakB * (m.susB + (1.0f - m.susB) * v.fmIdxB);
                 v.fmIdxA *= iCA; v.fmIdxB *= iCB;
@@ -822,7 +571,7 @@ private:
                 const float b = std::sin (kTwoPi * (float) v.ph[2] + iB * std::sin (kTwoPi * (float) v.ph[3]));
                 for (int j = 0; j < 4; ++j) { v.ph[j] += inc[j]; v.ph[j] -= std::floor (v.ph[j]); }
                 float s = a * (1.0f - 0.5f * m.mixB) + b * m.mixB;
-                if (m.bark > 0.0f)  // asymmetric drive: EP "bark"
+                if (m.bark > 0.0f)
                 {
                     const float x = s * barkDrive;
                     s = (x > 0.0f ? std::tanh (x) : std::tanh (x * 0.6f) / 0.6f) / barkDrive * (1.0f + 0.3f * m.bark);
@@ -830,97 +579,189 @@ private:
                 out[i] += s * amp * lvl;
             }
             v.fmAmp = amp;
-            alive = alive || amp > 1.0e-5f;
+            if (amp > 1.0e-5f) alive = true; else v.fmOn = false;
         }
 
-        // attack ramp + gain + pan
+        //---- va
+        if (v.vaOn)
+        {
+            const VaDef& va = d.va;
+            const float ds = decayScale();
+            const float fAinc = 1.0f / (std::max (0.5f, va.fA) * 0.001f * fs);
+            const float fDc = std::exp (-1.0f / (std::max (1.0f, va.fD * ds) * 0.001f * fs));
+            const float fRc = std::exp (-1.0f / (std::max (1.0f, va.fR) * 0.001f * fs));
+            const float aDc = va.decayMs > 0.0f ? std::exp (-1.0f / (va.decayMs * ds * 0.001f * fs)) : 1.0f;
+            const float sus = va.decayMs > 0.0f ? va.sustain : 1.0f;
+            const float riseC = 1.0f - std::exp (-1.0f / (0.003f * fs));
+            const float baseOct = std::log2 (std::max (20.0f, va.cutoff)) + va.keytrack * (float) (v.note - 60) / 12.0f
+                                + va.velAmt * (v.vel - 0.7f) + 1.5f * toneOffset();
+            const float q = 0.6f + va.reso * va.reso * 6.0f;
+            const float lvl = va.level * (1.0f - va.velSens + va.velSens * v.vel) * 0.55f / std::sqrt ((float) v.uni);
+            const float m2 = va.mix2;
+            for (int i = 0; i < n; ++i)
+            {
+                // filter envelope
+                if (v.released)       v.fenv *= fRc;
+                else if (v.fStage == 0) { v.fenv += fAinc; if (v.fenv >= 1.0f) { v.fenv = 1.0f; v.fStage = 1; } }
+                else                  v.fenv = va.fS + (v.fenv - va.fS) * fDc;
+                if (v.ampRise) { v.vamp += (1.0f - v.vamp) * riseC; if (v.vamp > 0.995f) v.ampRise = false; }
+                else           v.vamp = sus + (v.vamp - sus) * aDc;
+
+                if (v.cutCounter-- <= 0)
+                {
+                    v.cutCounter = 8;
+                    v.driftPh += v.driftInc * 8.0f; v.driftPh -= std::floor (v.driftPh);
+                    const float mo = va.motion * std::sin (kTwoPi * v.driftPh + 1.3f * (float) v.note);
+                    const float fc = std::exp2 (std::clamp (baseOct + va.envAmt * v.fenv + mo, 4.3f, 14.2f));
+                    for (auto& ch : v.vf) for (auto& st : ch) st.set (fc, q, fs);
+                }
+                const float drift = 1.0f + v.driftAmt * 0.000578f * std::sin (kTwoPi * v.driftPh);
+                float l = 0.0f, r = 0.0f;
+                for (int u = 0; u < v.uni; ++u)
+                {
+                    const float d0 = v.vinc[0][u] * drift, d1 = v.vinc[1][u] * drift;
+                    float x = osc (va.wave1, v.vph[0][u], d0);
+                    if (m2 > 0.0f) x += m2 * osc (va.wave2, v.vph[1][u], d1);
+                    v.vph[0][u] += d0; if (v.vph[0][u] >= 1.0f) v.vph[0][u] -= 1.0f;
+                    v.vph[1][u] += d1; if (v.vph[1][u] >= 1.0f) v.vph[1][u] -= 1.0f;
+                    l += x * (1.0f + v.vpan[u]);
+                    r += x * (1.0f - v.vpan[u]);
+                }
+                if (va.sub > 0.0f || va.noise > 0.0f)
+                {
+                    const float sb = va.sub * std::sin (kTwoPi * v.subPh) * std::sqrt ((float) v.uni);
+                    v.subPh += v.subInc; if (v.subPh >= 1.0f) v.subPh -= 1.0f;
+                    const float nz = va.noise * v.rng.next() * std::sqrt ((float) v.uni);
+                    l += sb + nz; r += sb + nz;
+                }
+                l = v.vf[0][0].process (l); r = v.vf[1][0].process (r);
+                if (va.poles >= 4) { l = v.vf[0][1].process (l); r = v.vf[1][1].process (r); }
+                const float g = lvl * v.vamp;
+                out[i] += 0.5f * (l + r) * g;
+                sd[i]  += 0.5f * (l - r) * g;
+            }
+            if (v.vamp < 1.0e-4f && sus <= 0.0f) v.vaOn = false; else alive = true;
+        }
+
+        //---- master envelope + output
+        const float relT = v.fastRelease ? 0.006f
+                         : (v.za != nullptr && v.undamped) ? std::max (p.releaseS, 3.0f) : std::max (0.01f, p.releaseS);
+        const float relC = std::exp (-5.0f / (relT * fs));
         const float g = v.gain;
-        const float pan = v.panAc * p.width;
-        const float gl = std::sqrt (0.5f * (1.0f - pan)) * 1.41421f, gr = std::sqrt (0.5f * (1.0f + pan)) * 1.41421f;
         for (int i = 0; i < n; ++i)
         {
-            if (v.attack < 1.0f) v.attack = std::min (1.0f, v.attack + v.attackInc);
-            const float s = out[i] * g * v.attack, sdv = sd[i] * g * v.attack;
-            L[i] += s * gl + sdv;
-            R[i] += s * gr - sdv;
+            if (v.released)        v.env *= relC;
+            else if (v.env < 1.0f) v.env = std::min (1.0f, v.env + v.attInc);
+            const float e = g * v.env;
+            const float s = out[i] * e, sdv = sd[i] * e;
+            L[i] += s + sdv;
+            R[i] += s - sdv;
         }
+        if (! alive || (v.released && v.env < 2.0e-5f)) v.active = false;
+    }
 
-        if (! alive) v.active = false;
+    void renderReleaseNoises (float* L, float* R, int n)
+    {
+        for (auto& r : relVoices)
+        {
+            if (r.z == nullptr) continue;
+            const SampleZone& z = *r.z;
+            for (int i = 0; i < n; ++i)
+            {
+                const int ip = (int) r.pos;
+                if (ip + 1 >= z.length) { r.z = nullptr; break; }
+                const float t = (float) (r.pos - ip);
+                L[i] += (z.l (ip) + (z.l (ip + 1) - z.l (ip)) * t) * r.gain;
+                R[i] += (z.r (ip) + (z.r (ip + 1) - z.r (ip)) * t) * r.gain;
+                r.pos += r.inc;
+            }
+        }
     }
 
     //--------------------------------------------------------------------------
+    void snap (const SoundDef& d, double bpm)
+    {
+        needsSnap = false;
+        sVol.init (dbToGain (p.volumeDb + d.gainDb), sr, 20.0f);
+        sCutoff.init (std::log (p.cutoffHz), sr, 25.0f);
+        for (auto* s : { &sFilterOn, &sSatOn, &sChorusOn, &sDelayOn, &sReverbOn, &sPumpOn }) s->init (0.0f, sr, 15.0f);
+        sFilterOn.value = p.filterOn; sSatOn.value = p.satOn; sChorusOn.value = p.chorusOn; sDelayOn.value = p.delayOn;
+        sReverbOn.value = p.reverbOn; sPumpOn.value = p.pumpOn;
+        sChorusMix.init (p.chorusMix, sr, 20.0f); sDelayMix.init (p.delayMix, sr, 20.0f);
+        sReverbMix.init (p.reverbMix, sr, 20.0f); sWidth.init (p.width, sr, 20.0f);
+        sAir.init (p.air, sr, 30.0f); sSatDrive.init (p.satDrive, sr, 30.0f);
+        sTape.init (d.tape, sr, 50.0f); sDrive.init (d.drive, sr, 50.0f); sGlue.init (d.glue, sr, 50.0f);
+        sLow.init (dbToGain (d.lowDb) - 1.0f, sr, 50.0f);
+        sHigh.init (dbToGain (d.highDb + 6.0f * toneOffset()) - 1.0f, sr, 50.0f);
+        lowCutLog = std::log (d.lowCutHz);
+        sDelayTime.init ((float) (delayBeats (p.delayTime) * 60.0 / bpm * sr), sr, 80.0f);
+        sPumpGain.init (1.0f, sr, 1.5f);
+    }
+
     void processChunk (float* L, float* R, int n, double bpm, double ppq)
     {
-        const PianoDef& d = pianos()[(size_t) std::clamp (p.piano, 0, kNumPianos - 1)];
-
-        if (needsSnap)
-        {
-            needsSnap = false;
-            sVol.init (dbToGain (p.volumeDb + d.gainDb), sr, 20.0f);
-            sCutoff.init (std::log (p.cutoffHz), sr, 25.0f);
-            for (auto* s : { &sFilterOn, &sChorusOn, &sDelayOn, &sReverbOn, &sPumpOn }) s->init (0.0f, sr, 15.0f);
-            sFilterOn.value = p.filterOn; sChorusOn.value = p.chorusOn; sDelayOn.value = p.delayOn;
-            sReverbOn.value = p.reverbOn; sPumpOn.value = p.pumpOn;
-            sChorusMix.init (p.chorusMix, sr, 20.0f); sDelayMix.init (p.delayMix, sr, 20.0f);
-            sReverbMix.init (p.reverbMix, sr, 20.0f); sWidth.init (p.width, sr, 20.0f);
-            sTape.init (d.tape, sr, 50.0f); sDrive.init (d.drive, sr, 50.0f); sGlue.init (d.glue, sr, 50.0f);
-            sLow.init (dbToGain (d.lowDb) - 1.0f, sr, 50.0f);
-            sHigh.init (dbToGain (d.highDb + 6.0f * toneOffset()) - 1.0f, sr, 50.0f);
-            sDelayTime.init ((float) (delayBeats (p.delayTime) * 60.0 / bpm * sr), sr, 80.0f);
-            sPumpGain.init (1.0f, sr, 1.5f);
-        }
+        const SoundDef& d = cur();
+        if (needsSnap) snap (d, bpm);
 
         std::fill (L, L + n, 0.0f);
         std::fill (R, R + n, 0.0f);
         for (auto& v : voices) if (v.active) renderVoice (v, L, R, n);
+        renderReleaseNoises (L, R, n);
 
-        // per block constants
-        const float loC  = onePoleCoef (220.0f, fs), hiC = onePoleCoef (3200.0f, fs);
-        const float q    = 0.707f + p.resonance * p.resonance * 9.0f, kq = 1.0f / q;
+        const float loC = onePoleCoef (220.0f, fs), hiC = onePoleCoef (3200.0f, fs);
+        const float q = 0.707f + p.resonance * p.resonance * 9.0f;
         const float logCut = std::log (std::clamp (p.cutoffHz, 40.0f, 20000.0f));
-        const float cAtt = std::exp (-1.0f / (0.004f * fs)), cRel = std::exp (-1.0f / (0.15f * fs));
+        const float cAtt = std::exp (-1.0f / (0.0002f * fs)), cRel = std::exp (-1.0f / (0.15f * fs));
         const double pumpDiv = p.pumpRate == 2 ? 4.0 : (p.pumpRate == 1 ? 2.0 : 1.0);
         const double ppqInc = bpm / 60.0 / sr;
         const float delayTarget = (float) std::min (delayBeats (p.delayTime) * 60.0 / bpm * sr, 3.0 * sr);
         const float dlLp = onePoleCoef (4500.0f, fs), dlHp = onePoleCoef (180.0f, fs);
         const float dcCoef = 1.0f - kTwoPi * 12.0f / fs;
         const float fb = std::clamp (p.delayFeedback, 0.0f, 0.95f);
+        sideHp.set (120.0f, 0.707f, fs);
+
+        // low cut changes slowly (only when the sound changes), so glide it once per block
+        lowCutLog += (std::log (d.lowCutHz) - lowCutLog) * (1.0f - std::exp (-(float) n / (0.05f * fs)));
+        lowCutL.set (std::exp (lowCutLog), 0.707f, fs); lowCutR.set (std::exp (lowCutLog), 0.707f, fs);
+
+        const float lowTarget  = dbToGain (d.lowDb) - 1.0f;
+        const float highTarget = dbToGain (d.highDb + 6.0f * toneOffset()) - 1.0f;
+        const float volTarget  = dbToGain (p.volumeDb + d.gainDb);
 
         for (int i = 0; i < n; ++i)
         {
             float l = L[i], r = R[i];
 
-            // --- piano colour: shelves (tone knob drives the high shelf)
-            const float lowG  = sLow.next (dbToGain (d.lowDb) - 1.0f);
-            const float highG = sHigh.next (dbToGain (d.highDb + 6.0f * toneOffset()) - 1.0f);
+            //---- colour: low cut + shelves (Tone drives the high shelf)
+            l = lowCutL.hp (l); r = lowCutR.hp (r);
+            const float lowG  = sLow.next (lowTarget);
+            const float highG = sHigh.next (highTarget);
             loL += loC * (l - loL); loR += loC * (r - loR);
             hiL += hiC * (l - hiL); hiR += hiC * (r - hiR);
             l += lowG * loL + highG * (l - hiL);
             r += lowG * loR + highG * (r - hiR);
 
-            // --- drive (fat saturation)
             const float drive = sDrive.next (d.drive);
             if (drive > 0.001f)
             {
-                const float k = 1.0f + 3.0f * drive;   // unity gain for quiet signals, rounds off peaks
-                l = std::tanh (l * k) / k;
-                r = std::tanh (r * k) / k;
+                const float k = 1.0f + 3.0f * drive;
+                l = std::tanh (l * k) / k; r = std::tanh (r * k) / k;
             }
 
-            // --- glue compressor
             const float glue = sGlue.next (d.glue);
             if (glue > 0.001f)
             {
+                // instant peak detection (no "first note pops" after silence), smoothed gain
                 const float thr = -6.0f - 20.0f * glue, ratio = 1.5f + 4.5f * glue;
                 const float lvl = std::max (std::abs (l), std::abs (r));
-                compEnv = lvl > compEnv ? lvl + (compEnv - lvl) * cAtt : lvl + (compEnv - lvl) * cRel;
+                compEnv = lvl > compEnv ? lvl : lvl + (compEnv - lvl) * cRel;
                 const float over = 20.0f * std::log10 (compEnv + 1.0e-9f) - thr;
                 const float gr = over > 0.0f ? over * (1.0f - 1.0f / ratio) : 0.0f;
-                const float cg = dbToGain (-gr + glue * 8.0f);
-                l *= cg; r *= cg;
+                const float target = dbToGain (-gr + glue * 8.0f);
+                compGain = target < compGain ? target + (compGain - target) * cAtt : target;
+                l *= compGain; r *= compGain;
             }
 
-            // --- tape (wow/flutter via short modulated delay, hiss, darker top)
             const float tape = sTape.next (d.tape);
             tapeL.push (l); tapeR.push (r);
             if (tape > 0.001f)
@@ -930,9 +771,7 @@ private:
                 const float md = (0.004f + tape * (0.0016f * std::sin (kTwoPi * (float) wowPh)
                                                    + 0.00025f * std::sin (kTwoPi * (float) flutterPh))) * fs;
                 const float wl = tapeL.read (md), wr = tapeR.read (md);
-                hissRng = hissRng * 1664525u + 1013904223u;
-                const float hn = ((float) (hissRng >> 9) * (1.0f / 8388608.0f)) * 2.0f - 1.0f;
-                hissLp += 0.45f * (hn - hissLp);
+                hissLp += 0.45f * (hissRng.next() - hissLp);
                 const float lpC = onePoleCoef (16000.0f - 11000.0f * tape, fs);
                 tapeLpL += lpC * (wl - tapeLpL); tapeLpR += lpC * (wr - tapeLpR);
                 const float mixT = std::min (1.0f, tape * 4.0f);
@@ -940,22 +779,27 @@ private:
                 r = r + mixT * (tapeLpR + hissLp * 0.004f * tape - r);
             }
 
-            // --- FILTER (low-pass, on/off)
-            const float fOn = sFilterOn.next (p.filterOn ? 1.0f : 0.0f);
+            //---- FILTER
             {
-                const float fc = std::min (std::exp (sCutoff.next (logCut)), 0.45f * fs);
-                const float gg = std::tan (kPi * fc / fs);
-                const float a1 = 1.0f / (1.0f + gg * (gg + kq)), a2 = gg * a1, a3 = gg * a2;
-                float v3 = l - ic2L, v1 = a1 * ic1L + a2 * v3, v2 = ic2L + a2 * ic1L + a3 * v3;
-                ic1L = 2.0f * v1 - ic1L; ic2L = 2.0f * v2 - ic2L;
-                const float fl = v2;
-                v3 = r - ic2R; v1 = a1 * ic1R + a2 * v3; v2 = ic2R + a2 * ic1R + a3 * v3;
-                ic1R = 2.0f * v1 - ic1R; ic2R = 2.0f * v2 - ic2R;
-                l += fOn * (fl - l);
-                r += fOn * (v2 - r);
+                const float on = sFilterOn.next (p.filterOn ? 1.0f : 0.0f);
+                const float fc = std::exp (sCutoff.next (logCut));
+                if ((i & 7) == 0) { filtL.set (fc, q, fs); filtR.set (fc, q, fs); }
+                const float fl = filtL.process (l), fr = filtR.process (r);
+                l += on * (fl - l); r += on * (fr - r);
             }
 
-            // --- PUMP (tempo-locked ducking)
+            //---- SATURATION
+            {
+                const float on = sSatOn.next (p.satOn ? 1.0f : 0.0f);
+                float sl = l, sr2 = r;
+                sat.process (sl, sr2, sSatDrive.next (p.satDrive), fs);
+                l += on * (sl - l); r += on * (sr2 - r);
+            }
+
+            //---- AIR
+            air.process (l, r, sAir.next (p.air));
+
+            //---- PUMP
             {
                 const float on = sPumpOn.next (p.pumpOn ? 1.0f : 0.0f);
                 const double ph = (ppq + i * ppqInc) * pumpDiv;
@@ -966,35 +810,32 @@ private:
                 l *= pg; r *= pg;
             }
 
-            // --- CHORUS
+            //---- CHORUS
             {
                 const float on = sChorusOn.next (p.chorusOn ? 1.0f : 0.0f) * sChorusMix.next (p.chorusMix);
                 chorusLine.push (0.5f * (l + r));
                 chPh += 0.55 / sr; chPh -= std::floor (chPh);
-                const float a = std::sin (kTwoPi * (float) chPh);
-                const float b = std::sin (kTwoPi * (float) chPh + 2.1f);
+                const float a = std::sin (kTwoPi * (float) chPh), b = std::sin (kTwoPi * (float) chPh + 2.1f);
                 const float wl = chorusLine.read ((0.011f + 0.0032f * a) * fs);
                 const float wr = chorusLine.read ((0.013f + 0.0032f * b) * fs);
                 l = l * (1.0f - 0.3f * on) + wl * 0.75f * on;
                 r = r * (1.0f - 0.3f * on) + wr * 0.75f * on;
             }
 
-            // --- DELAY (tempo-synced ping-pong)
+            //---- DELAY (tempo-synced ping-pong, darker repeats)
             {
                 const float on = sDelayOn.next (p.delayOn ? 1.0f : 0.0f);
                 const float t = sDelayTime.next (delayTarget);
                 const float dl = delayL.read (t), dr = delayR.read (t);
-                // filter the feedback path so repeats get darker
                 dlFbL += dlLp * (dr - dlFbL); dlHpL += dlHp * (dlFbL - dlHpL);
                 dlFbR += dlLp * (dl - dlFbR); dlHpR += dlHp * (dlFbR - dlHpR);
-                const float in = 0.5f * (l + r) * on;
-                delayL.push (in + fb * (dlFbL - dlHpL));
+                delayL.push (0.5f * (l + r) * on + fb * (dlFbL - dlHpL));
                 delayR.push (fb * (dlFbR - dlHpR));
                 const float mix = sDelayMix.next (p.delayMix) * 1.2f;
                 l += dl * mix; r += dr * mix;
             }
 
-            // --- REVERB
+            //---- REVERB
             {
                 const float on = sReverbOn.next (p.reverbOn ? 1.0f : 0.0f);
                 float wl = 0.0f, wr = 0.0f;
@@ -1004,20 +845,28 @@ private:
                 r = r * (1.0f - 0.25f * mix * on) + wr * mix * 1.3f;
             }
 
-            // --- width (mid/side)
+            //---- WIDTH (side below 120 Hz removed: the low end stays mono and tight)
             {
-                const float w = sWidth.next (p.width) * 2.0f;  // 0..2, 1 = unchanged
-                const float m = 0.5f * (l + r), s = 0.5f * (l - r) * w;
+                const float w = sWidth.next (p.width) * 2.0f;
+                const float m = 0.5f * (l + r), s = sideHp.hp (0.5f * (l - r)) * w;
                 l = m + s; r = m - s;
             }
 
-            // --- DC block, volume, soft clip
+            //---- DC block, volume, soft limiter
             const float yl = l - dcInL + dcCoef * dcL; dcInL = l; dcL = yl;
             const float yr = r - dcInR + dcCoef * dcR; dcInR = r; dcR = yr;
-            const float vol = sVol.next (dbToGain (p.volumeDb + d.gainDb));
-            L[i] = std::tanh (yl * vol);
-            R[i] = std::tanh (yr * vol);
+            const float vol = sVol.next (volTarget);
+            L[i] = softClip (yl * vol);
+            R[i] = softClip (yr * vol);
         }
+    }
+
+    static inline float softClip (float x)
+    {
+        const float a = std::abs (x);
+        if (a <= 0.75f) return x;
+        const float y = 0.75f + 0.25f * std::tanh ((a - 0.75f) / 0.25f);
+        return x < 0.0f ? -y : y;
     }
 
     //--------------------------------------------------------------------------
@@ -1025,20 +874,25 @@ private:
     float fs = 44100.0f;
     int block = 512;
     Params p;
+    const SampleBank* bank = nullptr;
     std::array<Voice, kMaxVoices> voices {};
+    std::array<RelVoice, kRelVoices> relVoices {};
     std::vector<float> mono, side;
     uint64_t counter = 0;
     bool pedal = false, needsSnap = true;
 
     FdnReverb reverb;
+    AirProcessor air;
+    Saturator sat;
+    Svf lowCutL, lowCutR, filtL, filtR, sideHp;
     DelayLine chorusLine, tapeL, tapeR, delayL, delayR;
-    float loL = 0, loR = 0, hiL = 0, hiR = 0, ic1L = 0, ic2L = 0, ic1R = 0, ic2R = 0, compEnv = 0;
+    float loL = 0, loR = 0, hiL = 0, hiR = 0, compEnv = 0, compGain = 1;
     float tapeLpL = 0, tapeLpR = 0, hissLp = 0, dlFbL = 0, dlFbR = 0, dlHpL = 0, dlHpR = 0;
     float dcL = 0, dcR = 0, dcInL = 0, dcInR = 0;
-    uint32_t hissRng = 12345u;
+    Rng hissRng { 12345u };
     double wowPh = 0, flutterPh = 0, chPh = 0, freePpq = 0;
-    Smoother sVol, sCutoff, sFilterOn, sChorusOn, sDelayOn, sReverbOn, sPumpOn, sChorusMix, sDelayMix,
-             sReverbMix, sWidth, sTape, sDrive, sGlue, sLow, sHigh, sDelayTime, sPumpGain;
+    Smoother sVol, sCutoff, sFilterOn, sSatOn, sChorusOn, sDelayOn, sReverbOn, sPumpOn, sChorusMix, sDelayMix,
+             sReverbMix, sWidth, sAir, sSatDrive, sTape, sDrive, sGlue, sLow, sHigh, sDelayTime, sPumpGain;
+    float lowCutLog = 3.0f;
 };
-
 } // namespace hk

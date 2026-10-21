@@ -304,12 +304,22 @@ void SoundBrowser::layoutHits()
 
     int n = 0;
     const int cols = 3, tw = (tileArea.getWidth() - (cols - 1) * 12) / cols, th = 58;
+    auto cell = [&] { const int cx = n % cols, cy = n / cols; ++n;
+                      return juce::Rectangle<int> (tileArea.getX() + cx * (tw + 12), tileArea.getY() + cy * (th + 12), tw, th); };
+    if (shownCategory == hk::kCatMine)
+    {
+        const auto saved = HouseKeysProcessor::listCustomPresets();
+        bool isSaved = false;
+        for (auto& f : saved) isSaved |= f.getFileNameWithoutExtension() == proc.getCustomName();
+        if (proc.hasCustomSound() && ! isSaved) hits.push_back ({ cell(), -1, hk::kAiSound, false, {}, proc.getCustomName() });
+        for (auto& f : saved)
+            hits.push_back ({ cell(), -1, -2, false, f, f.getFileNameWithoutExtension() });
+        return;
+    }
     for (int i = 0; i < hk::kNumSounds; ++i)
     {
         if (hk::sounds()[(size_t) i].category != shownCategory) continue;
-        const int cx = n % cols, cy = n / cols;
-        hits.push_back ({ { tileArea.getX() + cx * (tw + 12), tileArea.getY() + cy * (th + 12), tw, th }, -1, i, false });
-        ++n;
+        hits.push_back ({ cell(), -1, i, false });
     }
 }
 
@@ -335,6 +345,13 @@ void SoundBrowser::mouseUp (const juce::MouseEvent& e)
     const auto hit = hits[(size_t) h];
     if (hit.close) { setVisible (false); if (onClose) onClose(); return; }
     if (hit.category >= 0) { shownCategory = hit.category; hover = -1; layoutHits(); repaint(); return; }
+    if (hit.sound == -2 && hit.preset.existsAsFile())
+    {
+        proc.loadCustomPreset (hit.preset);
+        setVisible (false);
+        if (onClose) onClose();
+        return;
+    }
     if (hit.sound >= 0)
     {
         proc.selectSound (hit.sound);
@@ -345,6 +362,7 @@ void SoundBrowser::mouseUp (const juce::MouseEvent& e)
 
 void SoundBrowser::paint (juce::Graphics& g)
 {
+    struct EmptyHint {};
     auto all = getLocalBounds().toFloat();
     g.setColour (juce::Colour (0xff0d0a13));
     g.fillRoundedRectangle (all, 16.0f);
@@ -360,6 +378,13 @@ void SoundBrowser::paint (juce::Graphics& g)
                 150, 14, 300, 30, juce::Justification::centredLeft);
 
     const int cur = proc.getCurrentProgram();
+    if (shownCategory == hk::kCatMine && hits.size() <= (size_t) hk::kNumCategories + 1)
+    {
+        g.setColour (col::faint);
+        g.setFont (uiFont (15.0f));
+        g.drawMultiLineText (utf8 ("Her havner lydene du lager med \u2726 AI og lagrer.\nTrykk \u2726 AI, beskriv lyden, og trykk \u00abLagre som preset\u00bb."),
+                             tileArea.getX(), tileArea.getY() + 24, tileArea.getWidth());
+    }
     for (size_t i = 0; i < hits.size(); ++i)
     {
         const auto& h = hits[i];
@@ -394,15 +419,22 @@ void SoundBrowser::paint (juce::Graphics& g)
             g.drawText (hk::categoryName (h.category), r.withTrimmedLeft (26).toNearestInt(), juce::Justification::centredLeft);
             int count = 0;
             for (auto& s : hk::sounds()) count += s.category == h.category;
+            if (h.category == hk::kCatMine)
+            {
+                const auto saved = HouseKeysProcessor::listCustomPresets();
+                bool isSaved = false;
+                for (auto& f : saved) isSaved |= f.getFileNameWithoutExtension() == proc.getCustomName();
+                count = saved.size() + (proc.hasCustomSound() && ! isSaved ? 1 : 0);
+            }
             g.setFont (uiFont (12.0f, true));
             g.setColour (sel ? c : col::faint);
             g.drawText (juce::String (count), r.withTrimmedRight (12).toNearestInt(), juce::Justification::centredRight);
             continue;
         }
         // sound tile
-        const auto& d = hk::sounds()[(size_t) h.sound];
-        const auto c = col::category (d.category);
-        const bool isCur = h.sound == cur;
+        const auto& d = hk::sounds()[(size_t) juce::jmax (0, h.sound)];
+        const auto c = col::category (h.sound < 0 || h.sound == hk::kAiSound ? hk::kCatMine : d.category);
+        const bool isCur = h.sound == cur || (h.sound == -2 && cur == hk::kAiSound && h.label == proc.getCustomName());
         auto r = h.r.toFloat();
         if (isCur)
         {
@@ -418,7 +450,7 @@ void SoundBrowser::paint (juce::Graphics& g)
         g.fillRoundedRectangle (r.getX() + 12.0f, r.getY() + 14.0f, 4.0f, r.getHeight() - 28.0f, 2.0f);
         g.setColour (col::text);
         g.setFont (uiFont (17.0f, true));
-        auto tileName = utf8 (d.name);
+        auto tileName = h.label.isNotEmpty() ? (h.sound == hk::kAiSound ? utf8 ("\u2726 ") + h.label : h.label) : utf8 (d.name);
         if (d.sampler.user) tileName = proc.getUserSampleName().isNotEmpty() ? proc.getUserSampleName()
                                                                              : utf8 ("Dra en lydfil inn i pluginen");
         g.drawFittedText (tileName, r.reduced (28.0f, 8.0f).toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
@@ -444,14 +476,32 @@ AiPanel::AiPanel (HouseKeysProcessor& p) : proc (p)
     keyInput.setTextToShowWhenEmpty (utf8 ("Valgfritt: Anthropic API-n\u00f8kkel for Claude"), col::faint);
     keyInput.setText (PresetAI::loadApiKey(), false);
 
-    makeButton.setButtonText (utf8 ("LAG LYD"));
+    makeButton.setButtonText (utf8 ("LAG NY LYD"));
     saveKey.setButtonText ("Lagre");
-    for (auto* b : { &makeButton, &saveKey })
+    savePreset.setButtonText (utf8 ("Lagre som preset"));
+    nameInput.setFont (uiFont (15.0f, true));
+    nameInput.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff1b1724));
+    nameInput.setColour (juce::TextEditor::outlineColourId, col::border.brighter (0.3f));
+    nameInput.setColour (juce::TextEditor::focusedOutlineColourId, col::accent);
+    nameInput.setColour (juce::TextEditor::textColourId, col::text);
+    nameInput.setIndents (12, 9);
+    addChildComponent (nameInput);
+    addChildComponent (savePreset);
+    savePreset.onClick = [this]
     {
-        b->setColour (juce::TextButton::buttonColourId, b == &makeButton ? col::accent : col::panel2);
+        juce::String msg;
+        proc.saveCustomPreset (nameInput.getText(), msg);
+        notes.clear();
+        notes.add (msg);
+        resultTitle = utf8 ("\u2713  ") + nameInput.getText().trim();
+        repaint();
+    };
+    for (auto* b : { &makeButton, &saveKey, &savePreset })
+    {
+        b->setColour (juce::TextButton::buttonColourId, b == &makeButton ? col::accent : (b == &savePreset ? col::violet : col::panel2));
         b->setColour (juce::TextButton::textColourOffId, b == &makeButton ? col::bg : col::text);
         b->setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        addAndMakeVisible (*b);
+        if (b == &savePreset) addChildComponent (*b); else addAndMakeVisible (*b);
     }
     makeButton.onClick = [this] { run (input.getText()); };
     saveKey.onClick = [this]
@@ -485,9 +535,14 @@ void AiPanel::run (const juce::String& text)
         notes = r.notes;
         if (r.ok)
         {
-            proc.applyGenerated (r.sound, r.params);
-            resultTitle = utf8 ("\u2713  ") + utf8 (hk::sounds()[(size_t) r.sound].name)
+            proc.applyCustomSound (r.def, r.name);
+            resultTitle = utf8 ("\u2726  Ny lyd: ") + r.name
                         + (r.fromClaude ? utf8 ("   (laget av Claude)") : utf8 ("   (innebygd AI)"));
+            nameInput.setText (r.name, false);
+            hasResult = true;
+            nameInput.setVisible (true);
+            savePreset.setVisible (true);
+            resized();
         }
         else
             resultTitle = r.error;
@@ -497,7 +552,7 @@ void AiPanel::run (const juce::String& text)
     {
         busy = true;
         makeButton.setEnabled (false);
-        resultTitle = utf8 ("Claude tenker \u2026");
+        resultTitle = utf8 ("Claude designer lyden \u2026");
         notes.clear();
         repaint();
         juce::Component::SafePointer<AiPanel> safe (this);
@@ -526,6 +581,11 @@ void AiPanel::resized()
         chips.push_back ({ { x, y, w, 30 }, ex });
         x += w + 10;
     }
+
+    auto save = r.withTrimmedTop (getHeight() - 112).withHeight (40);
+    savePreset.setBounds (save.removeFromRight (180));
+    save.removeFromRight (10);
+    nameInput.setBounds (save.removeFromRight (360));
 
     auto bottom = r.withTrimmedTop (getHeight() - 60).withHeight (34);
     saveKey.setBounds (bottom.removeFromRight (90));
@@ -609,7 +669,8 @@ void AiPanel::paint (juce::Graphics& g)
         g.setFont (uiFont (14.5f));
         g.drawMultiLineText (utf8 ("Skriv p\u00e5 norsk eller engelsk hva du vil ha \u2013 type lyd (piano, rhodes, pad, bass, lead, pluck, supersaw \u2026)\n"
                                    "og hvordan den skal l\u00e5te (fet, m\u00f8rk, lys, luftig, bred, kort, lo-fi, med reverb, delay, pump, vibrato \u2026).\n"
-                                   "AI-en velger beste lyd og stiller inn alle knappene. Du kan justere videre etterp\u00e5."),
+                                   "AI-en lager en NY lyd: den endrer selve lyddesignet (lag, oscillatorer, filter) og alle knappene.\n"
+                                   "Liker du den, gi den et navn og trykk \u00abLagre som preset\u00bb \u2013 da ligger den under Mine lyder."),
                              26, ry + 20, getWidth() - 52);
     }
 
@@ -624,7 +685,7 @@ void AiPanel::paint (juce::Graphics& g)
 SoundSelector::SoundSelector (HouseKeysProcessor& p) : proc (p)
 {
     name.paramID = "sound";
-    for (juce::Component* c : { (juce::Component*) &prev, (juce::Component*) &next, (juce::Component*) &name, (juce::Component*) &browse, (juce::Component*) &ai })
+    for (juce::Component* c : { (juce::Component*) &prev, (juce::Component*) &next, (juce::Component*) &name, (juce::Component*) &ai })
     {
         addAndMakeVisible (c);
         c->setMouseCursor (juce::MouseCursor::PointingHandCursor);
@@ -640,16 +701,15 @@ SoundSelector::SoundSelector (HouseKeysProcessor& p) : proc (p)
 void SoundSelector::refresh()
 {
     const int cur = proc.getCurrentProgram();
-    const auto un = proc.getUserSampleName();
-    if (name.sound != cur || name.userName != un) { name.sound = cur; name.userName = un; name.repaint(); }
+    const auto un = proc.getUserSampleName(), cn = proc.getCustomName();
+    if (name.sound != cur || name.userName != un || name.customName != cn)
+    { name.sound = cur; name.userName = un; name.customName = cn; name.repaint(); }
 }
 
 void SoundSelector::resized()
 {
     auto r = getLocalBounds();
-    browse.setBounds (r.removeFromRight (104));
-    r.removeFromRight (8);
-    ai.setBounds (r.removeFromRight (72));
+    ai.setBounds (r.removeFromRight (84));
     r.removeFromRight (10);
     prev.setBounds (r.removeFromLeft (48));
     next.setBounds (r.removeFromRight (48));
@@ -693,9 +753,15 @@ void SoundSelector::NameBox::paintButton (juce::Graphics& g, bool highlighted, b
     auto nameArea = t.toNearestInt();
     auto nm = utf8 (d.name);
     if (d.sampler.user) nm = userName.isNotEmpty() ? userName : utf8 ("Dra en lydfil inn hit");
+    if (sound == hk::kAiSound) nm = customName.isNotEmpty() ? customName : utf8 ("Lag en lyd med \u2726 AI");
     g.setFont (uiFont (23.0f, true));
     g.setColour (col::text);
-    g.drawText (nm, nameArea, juce::Justification::centredLeft);
+    g.drawText (nm, nameArea.withTrimmedRight (30), juce::Justification::centredLeft);
+    const float ax = r.getRight() - 22.0f, ay = r.getCentreY();
+    juce::Path arrow;
+    arrow.addTriangle (ax - 6.0f, ay - 3.0f, ax + 6.0f, ay - 3.0f, ax, ay + 4.0f);
+    g.setColour (col::accent);
+    g.fillPath (arrow);
 }
 
 void SoundSelector::BrowseButton::paintButton (juce::Graphics& g, bool highlighted, bool down)

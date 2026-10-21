@@ -45,8 +45,15 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     std::atomic<float> meterL { 0.0f }, meterR { 0.0f };   // output peak for the UI meter
 
-    // AI: apply a generated preset (base sound + control values). Message thread only.
-    void applyGenerated (int sound, const std::map<juce::String, float>& params);
+    // AI-made / saved sounds (the "AI-lyd" slot). Message thread only.
+    void applyCustomSound (hk::SoundDef def, const juce::String& name);
+    bool saveCustomPreset (const juce::String& name, juce::String& message);
+    bool loadCustomPreset (const juce::File& file);
+    static juce::File presetFolder();
+    static juce::Array<juce::File> listCustomPresets();
+    juce::String getCustomName() const { return customName; }
+    bool hasCustomSound() const { return customDef.load() != nullptr; }
+    const hk::SoundDef& defFor (int index) const;
 
     // Drag & drop: load any audio file as the "Ditt sample" sound. Message thread only.
     bool loadUserSample (const juce::File& file, juce::String& message);
@@ -67,6 +74,11 @@ private:
     hk::Engine engine;
     juce::AudioBuffer<float> scratch;
     std::atomic<int> appliedSound { hk::kDefaultSound };   // sound whose defaults are currently loaded
+
+    std::vector<std::unique_ptr<hk::SoundDef>> customDefs;   // kept alive: voices may still use old ones
+    std::vector<std::unique_ptr<std::string>> customNames;
+    std::atomic<const hk::SoundDef*> customDef { nullptr };
+    juce::String customName;
 
     void installUserSample (juce::AudioBuffer<float> prepared, double sr, int root, float cents, bool chord, const juce::String& name);
     std::vector<std::unique_ptr<hk::SampleBank>> userBanks;  // kept alive: voices may still read old ones

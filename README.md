@@ -1,4 +1,4 @@
-# HouseKeys 3.4
+# HouseKeys 3.5
 
 Et house keys-instrument for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel).
 Ekte samplet flygel, friske house-pianoer, Rhodes, pads, bass, plucks og synth-akkorder,
@@ -31,8 +31,9 @@ Samme kommando oppdaterer til nyeste versjon.
 | **Bass** | Deep Sub · House Bass · Reese Bass · Organ Bass · Saw Bass · Acid Bass · Pluck Bass |
 | **Plucks** | House Pluck · Bright Pluck · Supersaw Pluck · Mallet Pluck · Deep Pluck · Soft Pluck |
 | **Ditt sample** | Dra en lydfil inn i pluginen (se under) |
+| **Mine lyder** | Lydene du lager med ✦ AI og lagrer |
 
-Trykk **LYDER** (eller på navnet) for lydleseren: kategorier til venstre, lydene som store
+Trykk på lydnavnet øverst for lydleseren: kategorier til venstre, lydene som store
 knapper til høyre. Pilene blar til forrige/neste lyd. Når du bytter lyd, settes alle knapper
 og effekter til den lydens egne innstillinger (Chord står alltid på Off). Lagrede prosjekter
 beholder dine egne justeringer.
@@ -75,8 +76,12 @@ FL Studio lar ikke plugins lage clipet selv, så dette er den raskeste veien.
 ## ✦ AI: lag lyden du vil ha
 
 Trykk **✦ AI** øverst og skriv hva du vil ha, på norsk eller engelsk, f.eks.
-*«fet house piano med mye luft og pump»*, *«mørk lo-fi rhodes med delay»* eller *«tung reese bass»*.
-AI-en velger beste grunnlyd og stiller inn alle knapper og effekter. Du kan justere videre etterpå.
+*«fet house piano med mye luft og pump»*, *«mørk lo-fi rhodes med delay»* eller *«bred pad med orgel»*.
+AI-en lager en **ny lyd**: den tar beste grunnlyd og endrer selve lyddesignet (flere stemmer,
+supersaw-, orgel- eller bjellelag, oktav, sub, filter, acid, glide …) og stiller inn alle knapper og effekter.
+
+Liker du lyden, skriv et navn og trykk **Lagre som preset**. Den havner under **Mine lyder** i lydleseren
+og kan brukes i alle prosjekter. Presetene ligger i `~/Library/Application Support/HouseKeys/Presets/`.
 
 - **Innebygd AI** (standard): gratis, virker uten internett, svarer med en gang. Forstår lydtyper
   (piano, rhodes, pad, bass, lead, pluck, supersaw …), karakter (fet, mørk, lys, luftig, bred, kort, lang,

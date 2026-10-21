@@ -26,8 +26,8 @@ namespace col
     {
         // Real Piano, House Piano, Deep Keys, Rhodes, Supersaw, Synths, Leads, Pads, Bass, Plucks, Your sample
         static const juce::uint32 cc[] = { 0xfff3e2c0, 0xffff9f2e, 0xffa98bff, 0xffff7a5a, 0xffff4fa3,
-                                           0xffffd84a, 0xff6fe8ff, 0xff45e0b0, 0xff5c8dff, 0xffd0f25f, 0xffffffff };
-        return juce::Colour (cc[juce::jlimit (0, 10, c)]);
+                                           0xffffd84a, 0xff6fe8ff, 0xff45e0b0, 0xff5c8dff, 0xffd0f25f, 0xffffffff, 0xffb68bff };
+        return juce::Colour (cc[juce::jlimit (0, 11, c)]);
     }
 }
 
@@ -102,7 +102,7 @@ public:
     std::function<void()> onClose;
 
 private:
-    struct Hit { juce::Rectangle<int> r; int category = -1, sound = -1; bool close = false; };
+    struct Hit { juce::Rectangle<int> r; int category = -1, sound = -1; bool close = false; juce::File preset; juce::String label; };
     void layoutHits();
     int hitAt (juce::Point<int>) const;
 
@@ -128,8 +128,9 @@ private:
     void run (const juce::String& text);
 
     HouseKeysProcessor& proc;
-    juce::TextEditor input, keyInput;
-    juce::TextButton makeButton, saveKey;
+    juce::TextEditor input, keyInput, nameInput;
+    juce::TextButton makeButton, saveKey, savePreset;
+    bool hasResult = false;
     juce::StringArray notes;
     juce::String resultTitle, lastPrompt;
     bool busy = false, usingClaude = false;
@@ -159,7 +160,7 @@ private:
         NameBox() : juce::Button ("sound") {}
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
         int sound = 0;
-        juce::String userName;
+        juce::String userName, customName;
     };
     struct BrowseButton : public juce::Button
     {

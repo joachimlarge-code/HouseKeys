@@ -2,6 +2,7 @@
 
 #include <juce_core/juce_core.h>
 #include <map>
+#include "Sounds.h"
 
 // "Lag lyden du vil ha": turns a description ("fet deep house piano med mye luft og pump")
 // into a sound + control settings.
@@ -18,6 +19,9 @@ namespace PresetAI
         juce::StringArray notes;                // what was done, in Norwegian
         juce::String error;
         bool fromClaude = false;
+        hk::SoundDef def;                       // the NEW sound: base design + AI changes, controls in def.preset
+        juce::String name;                      // suggested preset name
+        int baseSound = -1;
     };
 
     Result interpretLocal (const juce::String& text, int currentSound);

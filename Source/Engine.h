@@ -45,6 +45,8 @@ public:
     // The bank must stay alive while the engine uses it (the loader keeps it for the app's lifetime).
     void setSampleBank (const SampleBank* b) { bank = (b != nullptr && ! b->empty()) ? b : nullptr; }
     bool hasSamples() const { return bank != nullptr; }
+    // the definition used by the "AI-lyd" sound (kept alive by the owner)
+    void setCustomSound (const SoundDef* d) { custom = d; }
     void setUserBank (const SampleBank* b) { userBank = (b != nullptr && ! b->empty()) ? b : nullptr; }
 
     //--------------------------------------------------------------------------
@@ -177,7 +179,12 @@ private:
 
     struct RelVoice { const SampleZone* z = nullptr; double pos = 0, inc = 1; float gain = 0; };
 
-    const SoundDef& cur() const { return sounds()[(size_t) std::clamp (p.sound, 0, kNumSounds - 1)]; }
+    const SoundDef& def (int i) const
+    {
+        i = std::clamp (i, 0, kNumSounds - 1);
+        return (i == kAiSound && custom != nullptr) ? *custom : sounds()[(size_t) i];
+    }
+    const SoundDef& cur() const { return def (p.sound); }
     static float noteHz (int n) { return 440.0f * std::pow (2.0f, (n - 69) / 12.0f); }
     float decayScale() const { return std::pow (2.0f, (p.decay - 0.5f) * 4.0f); }   // 0.25x .. 4x
     float toneOffset() const { return (p.tone - 0.5f) * 2.0f; }                      // -1 .. +1
@@ -389,7 +396,7 @@ private:
     void retrigger (Voice& v, int note, float vel)
     {
         const float f = noteHz (note);
-        const VaDef& va = sounds()[(size_t) v.sound].va;
+        const VaDef& va = def (v.sound).va;
         for (int u = 0; u < v.uni; ++u)
         {
             const float t = v.uni > 1 ? (float) u / (float) (v.uni - 1) * 2.0f - 1.0f : 0.0f;
@@ -397,7 +404,7 @@ private:
             v.vinc[0][u] = f * std::pow (2.0f, cents / 1200.0f) / fs;
             v.vinc[1][u] = f * std::pow (2.0f, (va.semi2 * 100.0f + va.fine2 + cents * 1.1f) / 1200.0f) / fs;
         }
-        const SoundDef& sd = sounds()[(size_t) v.sound];
+        const SoundDef& sd = def (v.sound);
         if (sd.glideMs > 0.0f)
         {
             // continue from the pitch we are at now, then glide to the new note
@@ -413,7 +420,7 @@ private:
     {
         if (v.released) return;
         v.released = true;
-        const SoundDef& d = sounds()[(size_t) v.sound];
+        const SoundDef& d = def (v.sound);
         // damper noise
         if (bank != nullptr && v.za != nullptr && d.sampler.relNoise > 0.0f && ! d.sampler.user)
             if (const SampleZone* z = bank->release (v.note))
@@ -454,7 +461,7 @@ private:
 
     void renderVoice (Voice& v, float* L, float* R, int n)
     {
-        const SoundDef& d = sounds()[(size_t) v.sound];
+        const SoundDef& d = def (v.sound);
         std::fill (mono.begin(), mono.begin() + n, 0.0f);
         std::fill (side.begin(), side.begin() + n, 0.0f);
         float* out = mono.data();
@@ -950,6 +957,7 @@ private:
     Params p;
     const SampleBank* bank = nullptr;
     const SampleBank* userBank = nullptr;
+    const SoundDef* custom = nullptr;
     std::array<Voice, kMaxVoices> voices {};
     std::array<RelVoice, kRelVoices> relVoices {};
     std::vector<float> mono, side;

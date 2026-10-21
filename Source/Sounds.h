@@ -126,13 +126,13 @@ struct VaDef
 enum Category
 {
     kCatRealPiano = 0, kCatHousePiano, kCatDeepKeys, kCatRhodes, kCatSupersaw, kCatSynths,
-    kCatLeads, kCatPads, kCatBass, kCatPlucks, kCatUser, kNumCategories
+    kCatLeads, kCatPads, kCatBass, kCatPlucks, kCatUser, kCatMine, kNumCategories
 };
 
 inline const char* categoryName (int c)
 {
     static const char* n[kNumCategories] = { "Real Piano", "House Piano", "Deep House Keys", "Rhodes",
-                                              "Supersaw & Chords", "Synths", "Leads", "Pads", "Bass", "Plucks", "Ditt sample" };
+                                              "Supersaw & Chords", "Synths", "Leads", "Pads", "Bass", "Plucks", "Ditt sample", "Mine lyder" };
     return n[std::clamp (c, 0, kNumCategories - 1)];
 }
 
@@ -178,6 +178,8 @@ enum SoundId
     kHousePluck, kBrightPluck, kSupersawPluck, kMalletPluck, kDeepPluck, kSoftPluck,
     // Your sample (drag & drop)
     kDroppedSample,
+    // AI-made / saved sounds: the definition lives at runtime (see Engine::setCustomSound)
+    kAiSound,
     kNumSounds
 };
 
@@ -633,6 +635,12 @@ inline const std::array<SoundDef, kNumSounds>& sounds()
           s.lowCutHz = 30.0f; s.glue = 0.3f; s.gainDb = 3.5f;
           auto& q = s.preset; q.air = 0.3f; q.attackMs = 0.5f; q.releaseS = 0.3f; q.width = 0.5f;
           q.reverbMix = 0.18f; q.reverbSize = 0.55f; }
+
+        //================ AI SOUND (placeholder until the AI or a saved preset fills it) ================
+        d[(size_t) kAiSound] = d[(size_t) kFreshHouse];
+        d[(size_t) kAiSound].name = "AI-lyd";
+        d[(size_t) kAiSound].category = kCatMine;
+        d[(size_t) kAiSound].preset.sound = kAiSound;
 
         return d;
     }();

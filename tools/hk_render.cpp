@@ -109,9 +109,10 @@ std::vector<Ev> phraseFor (int category, int sr, double bpm, int& totalSamples)
 }
 
 void render (const hk::SampleBank* bank, const hk::Params& prm, const std::vector<Ev>& evs, int total, int sr, double bpm,
-             std::vector<float>& L, std::vector<float>& R, double& cpu)
+             std::vector<float>& L, std::vector<float>& R, double& cpu, const hk::SoundDef* custom = nullptr)
 {
     hk::Engine eng;
+    eng.setCustomSound (custom);
     eng.setParams (prm);
     eng.prepare (sr, 256);
     eng.setSampleBank (bank);
@@ -157,9 +158,24 @@ int main (int argc, char** argv)
             const auto text = juce::String::fromUTF8 (line).trim();
             if (text.isEmpty()) continue;
             const auto r = PresetAI::interpretLocal (text, hk::kDefaultSound);
-            juce::String ps;
-            for (auto& [k, v] : r.params) ps << k << "=" << juce::String (v, 2) << " ";
-            std::printf ("%-45s -> %-20s | %s\n", text.toRawUTF8(), r.sound >= 0 ? hk::sounds()[(size_t) r.sound].name : "-", ps.toRawUTF8());
+            std::printf ("%-40s -> \"%s\" (base %s)\n     %s\n", text.toRawUTF8(), r.name.toRawUTF8(),
+                         r.baseSound >= 0 ? hk::sounds()[(size_t) r.baseSound].name : "-",
+                         r.notes.joinIntoString (" | ").toRawUTF8());
+            if (argc > 1)   // render each AI sound into one file
+            {
+                static std::unique_ptr<hk::SampleBank> bk = SampleLibrary::loadBuiltIn();
+                static std::vector<float> XL, XR;
+                hk::SoundDef d = r.def;
+                hk::Params prm = d.preset; prm.sound = hk::kAiSound;
+                int total = 0; double c = 0;
+                auto evs = phraseFor (d.category, 44100, 124.0, total);
+                std::vector<float> L1, R1;
+                render (bk.get(), prm, evs, total, 44100, 124.0, L1, R1, c, &d);
+                float peak = 0; for (auto v : L1) peak = std::max (peak, std::abs (v));
+                std::printf ("     peak %.3f\n", peak);
+                XL.insert (XL.end(), L1.begin(), L1.end()); XR.insert (XR.end(), R1.begin(), R1.end());
+                writeWav (juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]), XL, XR, 44100);
+            }
         }
         return 0;
     }

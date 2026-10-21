@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "SampleLoader.h"
+#include "SoundCodec.h"
 
 namespace
 {
@@ -147,7 +148,7 @@ void HouseKeysProcessor::setParam (const juce::String& id, float value)
 
 float HouseKeysProcessor::soundDefault (const juce::String& id) const
 {
-    return presetValue (hk::sounds()[(size_t) juce::jlimit (0, hk::kNumSounds - 1, (int) raw ("sound"))].preset, id);
+    return presetValue (defFor ((int) raw ("sound")).preset, id);
 }
 
 void HouseKeysProcessor::resetToSoundDefault (const juce::String& id) { setParam (id, soundDefault (id)); }
@@ -156,14 +157,79 @@ void HouseKeysProcessor::applySoundPreset (int index)
 {
     if (! juce::isPositiveAndBelow (index, (int) hk::kNumSounds)) return;
     appliedSound = index;
-    const hk::Params& q = hk::sounds()[(size_t) index].preset;
+    const hk::Params q = defFor (index).preset;
     for (auto* id : kResetIds) setParam (id, presetValue (q, id));
 }
 
-void HouseKeysProcessor::applyGenerated (int sound, const std::map<juce::String, float>& params)
+const hk::SoundDef& HouseKeysProcessor::defFor (int index) const
 {
-    if (juce::isPositiveAndBelow (sound, (int) hk::kNumSounds)) selectSound (sound);
-    for (auto& [id, value] : params) setParam (id, value);
+    index = juce::jlimit (0, hk::kNumSounds - 1, index);
+    if (index == hk::kAiSound)
+        if (auto* d = customDef.load()) return *d;
+    return hk::sounds()[(size_t) index];
+}
+
+void HouseKeysProcessor::applyCustomSound (hk::SoundDef def, const juce::String& name)
+{
+    codec::sanitise (def);
+    customNames.push_back (std::make_unique<std::string> (name.toStdString()));
+    def.name = customNames.back()->c_str();
+    def.tag = "";
+    def.category = hk::kCatMine;
+    def.preset.sound = hk::kAiSound;
+    def.preset.smpMode = 0;
+    customDefs.push_back (std::make_unique<hk::SoundDef> (def));
+    customDef.store (customDefs.back().get());
+    customName = name;
+    appliedSound = -1;            // force the controls to the new sound's values
+    selectSound (hk::kAiSound);
+}
+
+juce::File HouseKeysProcessor::presetFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+             .getChildFile ("Application Support").getChildFile ("HouseKeys").getChildFile ("Presets");
+}
+
+juce::Array<juce::File> HouseKeysProcessor::listCustomPresets()
+{
+    auto files = presetFolder().findChildFiles (juce::File::findFiles, false, "*.hkpreset");
+    std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
+               { return a.getFileName().compareNatural (b.getFileName()) < 0; });
+    return files;
+}
+
+bool HouseKeysProcessor::saveCustomPreset (const juce::String& rawName, juce::String& message)
+{
+    const auto name = rawName.trim().isNotEmpty() ? rawName.trim() : juce::String ("Min lyd");
+    hk::SoundDef d = defFor (getCurrentProgram());
+    d.preset = readParams();               // save the controls exactly as they are now
+    auto json = codec::toVar (d);
+    juce::DynamicObject::Ptr root = new juce::DynamicObject();
+    root->setProperty ("name", name);
+    root->setProperty ("version", 1);
+    root->setProperty ("sound", json);
+    auto folder = presetFolder();
+    folder.createDirectory();
+    auto file = folder.getChildFile (juce::File::createLegalFileName (name) + ".hkpreset");
+    if (! file.replaceWithText (juce::JSON::toString (juce::var (root.get()))))
+    {
+        message = "Kunne ikke lagre i " + folder.getFullPathName();
+        return false;
+    }
+    message = juce::String::fromUTF8 ("Lagret \u00ab") + name + juce::String::fromUTF8 ("\u00bb under Mine lyder");
+    applyCustomSound (d, name);
+    return true;
+}
+
+bool HouseKeysProcessor::loadCustomPreset (const juce::File& file)
+{
+    const auto root = juce::JSON::parse (file);
+    if (! root.isObject()) return false;
+    hk::SoundDef d = hk::sounds()[(size_t) hk::kFreshHouse];
+    codec::fromVar (root.getProperty ("sound", {}), d);
+    applyCustomSound (d, root.getProperty ("name", file.getFileNameWithoutExtension()).toString());
+    return true;
 }
 
 void HouseKeysProcessor::selectSound (int index)
@@ -223,6 +289,7 @@ void HouseKeysProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     engine.setParams (readParams());
     engine.setSampleBank (SampleLibrary::get());
     engine.setUserBank (userBank.load());
+    engine.setCustomSound (customDef.load());
 
     double bpm = 120.0, ppq = 0.0;
     bool playing = false;
@@ -269,7 +336,7 @@ int HouseKeysProcessor::getCurrentProgram() { return (int) raw ("sound"); }
 
 const juce::String HouseKeysProcessor::getProgramName (int index)
 {
-    return juce::isPositiveAndBelow (index, (int) hk::kNumSounds) ? juce::String::fromUTF8 (hk::sounds()[(size_t) index].name)
+    return juce::isPositiveAndBelow (index, (int) hk::kNumSounds) ? juce::String::fromUTF8 (defFor (index).name)
                                                                   : juce::String();
 }
 
@@ -317,6 +384,13 @@ void HouseKeysProcessor::getStateInformation (juce::MemoryBlock& destData)
         us.setProperty ("data", userFlac.toBase64Encoding(), nullptr);
         state.appendChild (us, nullptr);
     }
+    if (auto* d = customDef.load())   // the AI / saved sound travels with the project
+    {
+        juce::ValueTree cs ("CustomSound");
+        cs.setProperty ("name", customName, nullptr);
+        cs.setProperty ("json", juce::JSON::toString (codec::toVar (*d), true), nullptr);
+        state.appendChild (cs, nullptr);
+    }
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
 
@@ -343,6 +417,19 @@ void HouseKeysProcessor::setStateInformation (const void* data, int sizeInBytes)
                                            (bool) us.getProperty ("chord", false), us.getProperty ("name").toString());
                 }
                 tree.removeChild (us, nullptr);
+            }
+            auto cs = tree.getChildWithName ("CustomSound");
+            if (cs.isValid())
+            {
+                hk::SoundDef d = hk::sounds()[(size_t) hk::kFreshHouse];
+                codec::fromVar (juce::JSON::parse (cs.getProperty ("json").toString()), d);
+                codec::sanitise (d);
+                customNames.push_back (std::make_unique<std::string> (cs.getProperty ("name").toString().toStdString()));
+                d.name = customNames.back()->c_str(); d.tag = ""; d.category = hk::kCatMine; d.preset.sound = hk::kAiSound;
+                customDefs.push_back (std::make_unique<hk::SoundDef> (d));
+                customDef.store (customDefs.back().get());
+                customName = cs.getProperty ("name").toString();
+                tree.removeChild (cs, nullptr);
             }
             apvts.replaceState (tree);
             cancelPendingUpdate();

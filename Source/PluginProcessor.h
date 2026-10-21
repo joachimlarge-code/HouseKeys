@@ -42,6 +42,7 @@ public:
     void resetToSoundDefault (const juce::String& id);
 
     juce::AudioProcessorValueTreeState apvts;
+    std::atomic<float> meterL { 0.0f }, meterR { 0.0f };   // output peak for the UI meter
 
 private:
     hk::Params readParams() const;

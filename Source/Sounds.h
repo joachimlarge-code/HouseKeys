@@ -63,6 +63,7 @@ struct SamplerDef
     float dynamics = 18.0f;   // loudness range from softest to hardest touch (dB)
     float velCurve = 1.0f;    // >1 = needs harder playing to reach the bright layers
     float relNoise = 0.5f;    // key-release (damper) noise level
+    float octave   = 0.0f;    // level of an extra piano layer one octave up (the classic fat house piano)
 };
 
 struct AcousticDef
@@ -121,14 +122,14 @@ struct VaDef
 
 enum Category
 {
-    kCatRealPiano = 0, kCatFreshHouse, kCatBrightKeys, kCatDeepKeys, kCatRhodes,
-    kCatPads, kCatBass, kCatPlucks, kCatChords, kNumCategories
+    kCatRealPiano = 0, kCatHousePiano, kCatDeepKeys, kCatRhodes, kCatSupersaw,
+    kCatLeads, kCatPads, kCatBass, kCatPlucks, kNumCategories
 };
 
 inline const char* categoryName (int c)
 {
-    static const char* n[kNumCategories] = { "Real Piano", "Fresh House Piano", "Bright Keys", "Deep House Keys",
-                                              "Warm Rhodes", "Wide Pads", "House Bass", "Plucks", "Melodic Chords" };
+    static const char* n[kNumCategories] = { "Real Piano", "House Piano", "Deep House Keys", "Rhodes",
+                                              "Supersaw & Chords", "Leads", "Pads", "Bass", "Plucks" };
     return n[std::clamp (c, 0, kNumCategories - 1)];
 }
 
@@ -143,7 +144,8 @@ struct SoundDef
     FmDef       fm;
     KeysDef     keys;
     VaDef       va;
-    bool  mono = false;       // one note at a time (bass)
+    bool  mono = false;       // one note at a time (bass, leads)
+    float glideMs = 0.0f;     // portamento between legato notes (mono sounds)
     float lowCutHz = 20.0f, lowDb = 0, highDb = 0, drive = 0, glue = 0.2f, tape = 0, gainDb = 0;
     Params preset;
 };
@@ -152,22 +154,22 @@ enum SoundId
 {
     // Real Piano
     kConcertGrand = 0, kIntimateFelt, kBalladGrand,
-    // Fresh House Piano
-    kFreshHouse, kPianoHouse90s, kSunsetPiano, kPumpingChords,
-    // Bright Keys
-    kCrystalKeys, kGlassBells,
+    // House Piano
+    kFreshHouse, kBigHousePiano, kSupersawPiano, kSaturatedPiano, kPianoHouse90s, kSunsetPiano, kPumpingChords,
     // Deep House Keys
-    kDeepHouseKeys, kUkGarageKeys, kDeepWideStab, kShortOrganStab, kGarageOrgan,
-    // Warm Rhodes
-    kWarmRhodes, kDreamWurli, kLofiRhodes,
-    // Wide Pads
+    kDeepHouseKeys, kUkGarageKeys, kDeepWideStab, kShortOrganStab,
+    // Rhodes
+    kWarmRhodes, kLofiRhodes,
+    // Supersaw & Chords
+    kSupersawChords, kEuphoricSupersaw, kSupersawStab, kMelodicChords, kRaveStab,
+    // Leads
+    kSawLead, kHouseLead, kSupersawLead,
+    // Pads
     kWarmPad, kAirPad, kDarkStrings,
-    // House Bass
+    // Bass
     kDeepSub, kHouseBass, kPluckBass,
     // Plucks
     kHousePluck, kSoftPluck,
-    // Melodic Chords
-    kMelodicChords, kSupersawChords, kRaveStab,
     kNumSounds
 };
 
@@ -207,14 +209,14 @@ inline const std::array<SoundDef, kNumSounds>& sounds()
           auto& q = s.preset; q.air = 0.25f; q.attackMs = 0.0f; q.releaseS = 0.6f; q.width = 0.48f;
           q.reverbMix = 0.34f; q.reverbSize = 0.82f; }
 
-        //================ FRESH HOUSE PIANO ================
-        { auto& s = def (kFreshHouse, kCatFreshHouse, "Fresh House Piano", "Lys, luftig og polert");
+        //================ HOUSE PIANO ================
+        { auto& s = def (kFreshHouse, kCatHousePiano, "Fresh House Piano", "Lys, luftig og polert");
           s.sampler = { 1.0f, 12.0f, 0.85f, 0.3f }; s.fallback = fb; s.fallback.hardness = 0.85f;
           s.lowCutHz = 95.0f; s.lowDb = -1.5f; s.highDb = 2.5f; s.drive = 0.12f; s.glue = 0.6f; s.gainDb = 4.1f;
           auto& q = s.preset; q.air = 0.6f; q.attackMs = 0.0f; q.releaseS = 0.25f; q.width = 0.42f;
           q.chorusOn = true; q.chorusMix = 0.16f; q.reverbMix = 0.2f; q.reverbSize = 0.5f; }
 
-        { auto& s = def (kPianoHouse90s, kCatFreshHouse, "Piano House 90s", "Klassisk M1-aktig stab");
+        { auto& s = def (kPianoHouse90s, kCatHousePiano, "Piano House 90s", "Klassisk M1-aktig stab");
           s.sampler = { 0.85f, 10.0f, 0.8f, 0.2f }; s.fallback = fb; s.fallback.hardness = 0.9f;
           s.organ.level = 0.32f; s.organ.bars = { 0.0f, 1.0f, 0.6f, 0.0f, 0.3f }; s.organ.decay = 1.6f; s.organ.click = 0.0f;
           s.fm.level = 0.22f; s.fm.ratioA = 1; s.fm.indexA = 2.4f; s.fm.susA = 0.1f; s.fm.decA = 0.22f; s.fm.mixB = 0.0f; s.fm.decay = 1.0f;
@@ -222,37 +224,18 @@ inline const std::array<SoundDef, kNumSounds>& sounds()
           auto& q = s.preset; q.air = 0.35f; q.attackMs = 0.0f; q.releaseS = 0.18f; q.width = 0.38f;
           q.chorusOn = true; q.chorusMix = 0.25f; q.reverbMix = 0.18f; q.reverbSize = 0.45f; }
 
-        { auto& s = def (kSunsetPiano, kCatFreshHouse, "Sunset Piano", "Melodisk med delay");
+        { auto& s = def (kSunsetPiano, kCatHousePiano, "Sunset Piano", "Melodisk med delay");
           s.sampler = { 1.0f, 14.0f, 0.9f, 0.35f }; s.fallback = fb;
           s.lowCutHz = 75.0f; s.highDb = 1.5f; s.glue = 0.45f; s.gainDb = 3.7f;
           auto& q = s.preset; q.air = 0.45f; q.attackMs = 0.0f; q.releaseS = 0.4f; q.width = 0.45f;
           q.delayOn = true; q.delayTime = 2; q.delayFeedback = 0.3f; q.delayMix = 0.17f;
           q.reverbMix = 0.3f; q.reverbSize = 0.72f; }
 
-        { auto& s = def (kPumpingChords, kCatFreshHouse, "Pumping Chords", "Min9-akkorder som pumper");
+        { auto& s = def (kPumpingChords, kCatHousePiano, "Pumping Chords", "Pumper i takt med kicken");
           s.sampler = { 1.0f, 10.0f, 0.85f, 0.2f }; s.fallback = fb; s.fallback.hardness = 0.8f;
-          s.lowCutHz = 130.0f; s.lowDb = -1.0f; s.highDb = 2.0f; s.drive = 0.2f; s.glue = 0.65f; s.gainDb = 5.6f;
-          auto& q = s.preset; q.chord = kMin9; q.air = 0.45f; q.attackMs = 0.0f; q.releaseS = 0.25f; q.width = 0.40f;
+          s.lowCutHz = 130.0f; s.lowDb = -1.0f; s.highDb = 2.0f; s.drive = 0.2f; s.glue = 0.65f; s.gainDb = 6.4f;
+          auto& q = s.preset; q.air = 0.45f; q.attackMs = 0.0f; q.releaseS = 0.25f; q.width = 0.40f;
           q.chorusOn = true; q.chorusMix = 0.2f; q.reverbMix = 0.22f; q.pumpOn = true; q.pumpDepth = 0.6f; }
-
-        //================ BRIGHT KEYS ================
-        { auto& s = def (kCrystalKeys, kCatBrightKeys, "Crystal Keys", "Piano + glitrende bjelle");
-          s.sampler = { 0.8f, 14.0f, 0.9f, 0.2f }; s.fallback = fb;
-          s.fm.level = 0.32f; s.fm.ratioA = 3.5f; s.fm.indexA = 1.2f; s.fm.susA = 0.25f; s.fm.decA = 1.2f;
-          s.fm.octB = 2; s.fm.ratioB = 1.41f; s.fm.indexB = 0.8f; s.fm.decB = 0.7f; s.fm.mixB = 0.4f; s.fm.decay = 3.0f;
-          s.lowCutHz = 110.0f; s.highDb = 2.0f; s.glue = 0.35f; s.gainDb = 1.9f;
-          auto& q = s.preset; q.air = 0.55f; q.attackMs = 0.0f; q.releaseS = 0.45f; q.width = 0.45f;
-          q.chorusOn = true; q.chorusMix = 0.22f; q.delayOn = true; q.delayTime = 4; q.delayFeedback = 0.35f; q.delayMix = 0.18f;
-          q.reverbMix = 0.32f; q.reverbSize = 0.75f; }
-
-        { auto& s = def (kGlassBells, kCatBrightKeys, "Glass Bells", "Klokker og glitter");
-          s.sampler = { 0.3f, 12.0f, 1.0f, 0.0f }; s.fallback = fb; s.fallback.level = 0.35f;
-          s.fm.level = 0.8f; s.fm.ratioA = 3.5f; s.fm.indexA = 1.4f; s.fm.susA = 0.3f; s.fm.decA = 1.5f;
-          s.fm.octB = 2; s.fm.ratioB = 1.41f; s.fm.indexB = 1.0f; s.fm.decB = 0.8f; s.fm.mixB = 0.4f; s.fm.decay = 5.0f;
-          s.lowCutHz = 150.0f; s.highDb = 1.0f; s.glue = 0.25f; s.gainDb = -3.4f;
-          auto& q = s.preset; q.air = 0.4f; q.attackMs = 0.0f; q.releaseS = 0.7f; q.width = 0.55f;
-          q.chorusOn = true; q.chorusMix = 0.3f; q.delayOn = true; q.delayTime = 3; q.delayFeedback = 0.4f; q.delayMix = 0.22f;
-          q.reverbMix = 0.4f; q.reverbSize = 0.8f; }
 
         //================ DEEP HOUSE KEYS ================
         { auto& s = def (kDeepHouseKeys, kCatDeepKeys, "Deep House Keys", "Varm, myk og dyp");
@@ -281,27 +264,13 @@ inline const std::array<SoundDef, kNumSounds>& sounds()
           auto& q = s.preset; q.air = 0.2f; q.attackMs = 1.0f; q.releaseS = 0.08f; q.width = 0.5f;
           q.reverbMix = 0.15f; q.reverbSize = 0.4f; }
 
-        { auto& s = def (kGarageOrgan, kCatDeepKeys, "Garage Organ", "Klassisk house-orgel");
-          s.organ.level = 1.0f; s.organ.bars = { 0.5f, 1.0f, 0.6f, 0.4f, 0.3f }; s.organ.decay = 0.0f; s.organ.click = 0.45f;
-          s.lowCutHz = 70.0f; s.lowDb = 1.0f; s.highDb = 1.0f; s.drive = 0.35f; s.glue = 0.45f; s.gainDb = 0.6f;
-          auto& q = s.preset; q.air = 0.2f; q.attackMs = 2.0f; q.releaseS = 0.06f; q.width = 0.55f;
-          q.chorusOn = true; q.chorusMix = 0.5f; q.reverbMix = 0.18f; q.reverbSize = 0.45f; }
-
-        //================ WARM RHODES ================
+        //================ RHODES ================
         { auto& s = def (kWarmRhodes, kCatRhodes, "Warm Rhodes", "Klassisk el-piano");
           s.fm.level = 1.0f; s.fm.ratioA = 1; s.fm.indexA = 1.3f; s.fm.susA = 0.25f; s.fm.decA = 1.2f;
           s.fm.octB = 1; s.fm.ratioB = 14; s.fm.indexB = 1.6f; s.fm.decB = 0.06f; s.fm.mixB = 0.45f; s.fm.decay = 4.5f; s.fm.bark = 0.4f;
           s.lowCutHz = 45.0f; s.lowDb = 2.0f; s.highDb = -1.0f; s.drive = 0.12f; s.glue = 0.35f; s.gainDb = -0.3f;
           auto& q = s.preset; q.air = 0.2f; q.attackMs = 1.0f; q.releaseS = 0.35f; q.width = 0.6f;
           q.chorusOn = true; q.chorusMix = 0.45f; q.reverbMix = 0.26f; q.reverbSize = 0.6f; }
-
-        { auto& s = def (kDreamWurli, kCatRhodes, "Dream Wurli", "Dr\xc3\xb8mmende reed-piano");
-          s.fm.level = 1.0f; s.fm.ratioA = 1; s.fm.indexA = 1.7f; s.fm.susA = 0.3f; s.fm.decA = 0.6f;
-          s.fm.octB = 1; s.fm.ratioB = 3; s.fm.indexB = 0.7f; s.fm.decB = 0.2f; s.fm.mixB = 0.3f; s.fm.decay = 3.0f; s.fm.bark = 0.5f;
-          s.lowCutHz = 50.0f; s.lowDb = 1.0f; s.highDb = -2.0f; s.drive = 0.2f; s.glue = 0.35f; s.tape = 0.35f; s.gainDb = 0.0f;
-          auto& q = s.preset; q.air = 0.15f; q.attackMs = 1.0f; q.releaseS = 0.3f; q.width = 0.6f;
-          q.chorusOn = true; q.chorusMix = 0.4f; q.delayOn = true; q.delayTime = 4; q.delayFeedback = 0.3f; q.delayMix = 0.16f;
-          q.reverbMix = 0.33f; q.reverbSize = 0.7f; }
 
         { auto& s = def (kLofiRhodes, kCatRhodes, "Lo-fi Rhodes", "St\xc3\xb8vete tape-Rhodes");
           s.fm.level = 1.0f; s.fm.ratioA = 1; s.fm.indexA = 1.2f; s.fm.susA = 0.25f; s.fm.decA = 1.0f;
@@ -380,7 +349,7 @@ inline const std::array<SoundDef, kNumSounds>& sounds()
           q.chorusOn = true; q.chorusMix = 0.3f; q.reverbMix = 0.3f; q.reverbSize = 0.65f; }
 
         //================ MELODIC CHORDS ================
-        { auto& s = def (kMelodicChords, kCatChords, "Melodic Chords", "Fyldige synth-akkorder");
+        { auto& s = def (kMelodicChords, kCatSupersaw, "Melodic Chords", "Fyldige synth-akkorder");
           auto& v = s.va; v.level = 1.0f; v.wave1 = kSaw; v.wave2 = kSaw; v.semi2 = 12.0f; v.mix2 = 0.22f;
           v.unison = 5; v.detune = 16.0f; v.spread = 0.7f; v.sub = 0.1f;
           v.cutoff = 800.0f; v.reso = 0.15f; v.envAmt = 2.4f; v.keytrack = 0.45f; v.velAmt = 0.6f;
@@ -389,25 +358,97 @@ inline const std::array<SoundDef, kNumSounds>& sounds()
           auto& q = s.preset; q.air = 0.35f; q.attackMs = 2.0f; q.releaseS = 0.35f; q.width = 0.7f;
           q.chorusOn = true; q.chorusMix = 0.2f; q.reverbMix = 0.28f; q.reverbSize = 0.65f; }
 
-        { auto& s = def (kSupersawChords, kCatChords, "Supersaw Chords", "Stort og breit");
+        { auto& s = def (kSupersawChords, kCatSupersaw, "Supersaw Chords", "Stort og breit");
           auto& v = s.va; v.level = 1.0f; v.wave1 = kSaw; v.wave2 = kSaw; v.fine2 = 9.0f; v.mix2 = 0.5f;
           v.unison = 7; v.detune = 32.0f; v.spread = 0.95f;
           v.cutoff = 2200.0f; v.reso = 0.1f; v.envAmt = 1.4f; v.keytrack = 0.4f; v.velAmt = 0.4f;
           v.fA = 2.0f; v.fD = 600.0f; v.fS = 0.55f; v.fR = 400.0f; v.decayMs = 900.0f; v.sustain = 0.75f; v.motion = 0.15f; v.poles = 2;
-          s.lowCutHz = 160.0f; s.highDb = 1.0f; s.glue = 0.5f; s.gainDb = 3.2f;
+          s.lowCutHz = 160.0f; s.highDb = 1.0f; s.glue = 0.5f; s.gainDb = 3.7f;
           auto& q = s.preset; q.air = 0.45f; q.attackMs = 4.0f; q.releaseS = 0.4f; q.width = 0.8f;
           q.reverbMix = 0.3f; q.reverbSize = 0.7f; q.pumpOn = true; q.pumpDepth = 0.5f; }
 
-        { auto& s = def (kRaveStab, kCatChords, "Rave Stab", "Kort og hard Min7");
+        { auto& s = def (kRaveStab, kCatSupersaw, "Rave Stab", "Kort og hard stab");
           s.sampler = { 0.45f, 8.0f, 0.8f, 0.0f }; s.fallback = fb; s.fallback.level = 0.45f;
           s.organ.level = 0.35f; s.organ.bars = { 0.6f, 1.0f, 0.4f, 0.0f, 0.0f }; s.organ.decay = 0.7f; s.organ.click = 0.2f;
           s.fm.level = 0.75f; s.fm.ratioA = 1; s.fm.indexA = 3.4f; s.fm.susA = 0.15f; s.fm.decA = 0.22f;
           s.fm.octB = 1; s.fm.ratioB = 2; s.fm.indexB = 2.5f; s.fm.decB = 0.15f; s.fm.susB = 0.1f; s.fm.mixB = 0.5f;
           s.fm.feedback = 0.25f; s.fm.decay = 0.55f;
-          s.lowCutHz = 110.0f; s.lowDb = 2.0f; s.highDb = 2.5f; s.drive = 0.5f; s.glue = 0.7f; s.gainDb = -0.0f;
-          auto& q = s.preset; q.chord = kMin7; q.air = 0.3f; q.attackMs = 0.0f; q.releaseS = 0.12f; q.width = 0.40f;
+          s.lowCutHz = 110.0f; s.lowDb = 2.0f; s.highDb = 2.5f; s.drive = 0.5f; s.glue = 0.7f; s.gainDb = 2.8f;
+          auto& q = s.preset; q.air = 0.3f; q.attackMs = 0.0f; q.releaseS = 0.12f; q.width = 0.40f;
           q.chorusOn = true; q.chorusMix = 0.2f; q.delayOn = true; q.delayTime = 2; q.delayFeedback = 0.3f; q.delayMix = 0.2f;
           q.reverbMix = 0.2f; }
+
+        //================ NEW HOUSE PIANOS ================
+        { auto& s = def (kBigHousePiano, kCatHousePiano, "Big House Piano", "Fet, oktav-stablet");
+          s.sampler = { 1.0f, 10.0f, 0.8f, 0.2f, 0.45f }; s.fallback = fb; s.fallback.hardness = 0.9f;
+          s.lowCutHz = 110.0f; s.lowDb = -1.0f; s.highDb = 2.5f; s.drive = 0.25f; s.glue = 0.65f; s.gainDb = 3.3f;
+          auto& q = s.preset; q.air = 0.55f; q.attackMs = 0.0f; q.releaseS = 0.25f; q.width = 0.5f;
+          q.chorusOn = true; q.chorusMix = 0.2f; q.reverbMix = 0.2f; q.reverbSize = 0.5f; }
+
+        { auto& s = def (kSupersawPiano, kCatHousePiano, "Supersaw Piano", "Piano + supersaw-lag");
+          s.sampler = { 1.0f, 10.0f, 0.85f, 0.2f, 0.0f }; s.fallback = fb;
+          auto& v = s.va; v.level = 0.32f; v.wave1 = kSaw; v.wave2 = kSaw; v.semi2 = 12.0f; v.mix2 = 0.25f;
+          v.unison = 7; v.detune = 26.0f; v.spread = 0.9f;
+          v.cutoff = 2200.0f; v.reso = 0.1f; v.envAmt = 1.2f; v.keytrack = 0.4f; v.velAmt = 0.4f;
+          v.fA = 2.0f; v.fD = 500.0f; v.fS = 0.4f; v.fR = 300.0f; v.decayMs = 1400.0f; v.sustain = 0.35f; v.poles = 2;
+          s.lowCutHz = 120.0f; s.highDb = 1.5f; s.drive = 0.15f; s.glue = 0.55f; s.gainDb = 1.5f;
+          auto& q = s.preset; q.air = 0.5f; q.attackMs = 0.0f; q.releaseS = 0.3f; q.width = 0.55f;
+          q.reverbMix = 0.24f; q.reverbSize = 0.6f; }
+
+        { auto& s = def (kSaturatedPiano, kCatHousePiano, "Saturated Piano", "Varm, kraftig og mettet");
+          s.sampler = { 1.0f, 9.0f, 0.85f, 0.25f, 0.0f }; s.fallback = fb;
+          s.lowCutHz = 90.0f; s.lowDb = 1.5f; s.highDb = 1.0f; s.drive = 0.3f; s.glue = 0.6f; s.tape = 0.15f; s.gainDb = 7.0f;
+          auto& q = s.preset; q.air = 0.4f; q.attackMs = 0.0f; q.releaseS = 0.22f; q.width = 0.45f;
+          q.satOn = true; q.satDrive = 0.22f; q.reverbMix = 0.18f; q.reverbSize = 0.5f; }
+
+        //================ NEW SUPERSAWS ================
+        { auto& s = def (kEuphoricSupersaw, kCatSupersaw, "Euphoric Supersaw", "Stor, bred og euforisk");
+          auto& v = s.va; v.level = 1.0f; v.wave1 = kSaw; v.wave2 = kSaw; v.semi2 = 12.0f; v.mix2 = 0.35f;
+          v.unison = 7; v.detune = 36.0f; v.spread = 1.0f;
+          v.cutoff = 3000.0f; v.reso = 0.1f; v.envAmt = 0.8f; v.keytrack = 0.4f; v.velAmt = 0.3f;
+          v.fA = 5.0f; v.fD = 800.0f; v.fS = 0.7f; v.fR = 600.0f; v.motion = 0.15f; v.poles = 2;
+          s.lowCutHz = 180.0f; s.highDb = 1.0f; s.glue = 0.5f; s.gainDb = 2.8f;
+          auto& q = s.preset; q.air = 0.55f; q.attackMs = 15.0f; q.releaseS = 0.8f; q.width = 0.85f;
+          q.delayOn = true; q.delayTime = 2; q.delayFeedback = 0.3f; q.delayMix = 0.15f;
+          q.reverbMix = 0.38f; q.reverbSize = 0.8f; q.pumpOn = true; q.pumpDepth = 0.55f; }
+
+        { auto& s = def (kSupersawStab, kCatSupersaw, "Supersaw Stab", "Kort og punchy supersaw");
+          auto& v = s.va; v.level = 1.0f; v.wave1 = kSaw; v.wave2 = kSaw; v.semi2 = 12.0f; v.mix2 = 0.3f;
+          v.unison = 7; v.detune = 30.0f; v.spread = 0.9f;
+          v.cutoff = 900.0f; v.reso = 0.15f; v.envAmt = 3.2f; v.keytrack = 0.4f; v.velAmt = 0.6f;
+          v.fA = 2.0f; v.fD = 220.0f; v.fS = 0.05f; v.fR = 150.0f; v.decayMs = 380.0f; v.sustain = 0.0f; v.poles = 4;
+          s.lowCutHz = 150.0f; s.drive = 0.2f; s.glue = 0.55f; s.gainDb = 1.3f;
+          auto& q = s.preset; q.air = 0.45f; q.attackMs = 1.0f; q.releaseS = 0.15f; q.width = 0.75f;
+          q.delayOn = true; q.delayTime = 2; q.delayFeedback = 0.3f; q.delayMix = 0.18f; q.reverbMix = 0.25f; q.reverbSize = 0.6f; }
+
+        //================ LEADS ================
+        { auto& s = def (kSawLead, kCatLeads, "Saw Lead", "Fet og skarp");
+          auto& v = s.va; v.level = 1.0f; v.wave1 = kSaw; v.wave2 = kSaw; v.fine2 = 10.0f; v.mix2 = 0.8f;
+          v.unison = 3; v.detune = 14.0f; v.spread = 0.45f; v.sub = 0.2f;
+          v.cutoff = 2400.0f; v.reso = 0.2f; v.envAmt = 1.2f; v.keytrack = 0.5f; v.velAmt = 0.5f;
+          v.fA = 2.0f; v.fD = 300.0f; v.fS = 0.6f; v.fR = 200.0f; v.poles = 4; v.drift = 3.0f;
+          s.mono = true; s.glideMs = 60.0f; s.lowCutHz = 120.0f; s.drive = 0.3f; s.glue = 0.4f; s.gainDb = -1.4f;
+          auto& q = s.preset; q.air = 0.45f; q.attackMs = 3.0f; q.releaseS = 0.2f; q.width = 0.5f;
+          q.delayOn = true; q.delayTime = 2; q.delayFeedback = 0.35f; q.delayMix = 0.22f; q.reverbMix = 0.25f; q.reverbSize = 0.6f; }
+
+        { auto& s = def (kHouseLead, kCatLeads, "House Lead", "Klassisk og hul");
+          auto& v = s.va; v.level = 1.0f; v.wave1 = kSquare; v.wave2 = kSaw; v.semi2 = 12.0f; v.mix2 = 0.3f;
+          v.unison = 2; v.detune = 8.0f; v.spread = 0.3f;
+          v.cutoff = 1800.0f; v.reso = 0.25f; v.envAmt = 1.5f; v.keytrack = 0.5f; v.velAmt = 0.6f;
+          v.fA = 2.0f; v.fD = 250.0f; v.fS = 0.5f; v.fR = 200.0f; v.poles = 4; v.drift = 2.0f;
+          s.mono = true; s.glideMs = 40.0f; s.lowCutHz = 140.0f; s.drive = 0.2f; s.glue = 0.4f; s.gainDb = -1.9f;
+          auto& q = s.preset; q.air = 0.35f; q.attackMs = 2.0f; q.releaseS = 0.15f; q.width = 0.5f;
+          q.chorusOn = true; q.chorusMix = 0.2f; q.delayOn = true; q.delayTime = 1; q.delayFeedback = 0.3f; q.delayMix = 0.18f;
+          q.reverbMix = 0.22f; q.reverbSize = 0.55f; }
+
+        { auto& s = def (kSupersawLead, kCatLeads, "Supersaw Lead", "Bred og episk");
+          auto& v = s.va; v.level = 1.0f; v.wave1 = kSaw; v.wave2 = kSaw; v.semi2 = 12.0f; v.mix2 = 0.35f;
+          v.unison = 7; v.detune = 26.0f; v.spread = 0.8f;
+          v.cutoff = 3200.0f; v.reso = 0.1f; v.envAmt = 0.8f; v.keytrack = 0.4f; v.velAmt = 0.4f;
+          v.fA = 3.0f; v.fD = 400.0f; v.fS = 0.7f; v.fR = 300.0f; v.poles = 2;
+          s.mono = true; s.glideMs = 50.0f; s.lowCutHz = 150.0f; s.glue = 0.45f; s.gainDb = 0.5f;
+          auto& q = s.preset; q.air = 0.5f; q.attackMs = 4.0f; q.releaseS = 0.3f; q.width = 0.7f;
+          q.delayOn = true; q.delayTime = 2; q.delayFeedback = 0.35f; q.delayMix = 0.2f; q.reverbMix = 0.3f; q.reverbSize = 0.7f; }
 
         return d;
     }();

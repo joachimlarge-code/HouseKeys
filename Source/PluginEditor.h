@@ -7,23 +7,26 @@ namespace hkui
 {
 namespace col
 {
-    const juce::Colour bg      { 0xff0f0d13 };
-    const juce::Colour bg2     { 0xff19161f };
-    const juce::Colour panel   { 0xff1e1b26 };
-    const juce::Colour panel2  { 0xff27232f };
-    const juce::Colour border  { 0xff332e3d };
-    const juce::Colour track   { 0xff383344 };
-    const juce::Colour knob    { 0xff2c2836 };
-    const juce::Colour accent  { 0xffffb43c };
-    const juce::Colour air     { 0xff7fe3ff };
-    const juce::Colour text    { 0xfff2ecf6 };
-    const juce::Colour dim     { 0xff8b8399 };
-    const juce::Colour faint   { 0xff5d5669 };
+    const juce::Colour bg      { 0xff0a0810 };
+    const juce::Colour bg2     { 0xff15111d };
+    const juce::Colour panel   { 0xe01a1622 };
+    const juce::Colour panel2  { 0xff25202f };
+    const juce::Colour border  { 0xff332c40 };
+    const juce::Colour track   { 0xff2f2a3b };
+    const juce::Colour knob    { 0xff2a2533 };
+    const juce::Colour accent  { 0xffff9f2e };
+    const juce::Colour hot     { 0xffff4fa3 };
+    const juce::Colour violet  { 0xff8a5cff };
+    const juce::Colour air     { 0xff6fe8ff };
+    const juce::Colour text    { 0xfff4eef8 };
+    const juce::Colour dim     { 0xff8d84a0 };
+    const juce::Colour faint   { 0xff5a5368 };
 
     inline juce::Colour category (int c)
     {
-        static const juce::uint32 c9[] = { 0xfff1dfbd, 0xffffb43c, 0xff7fe3ff, 0xffa995ff, 0xffff8a5c,
-                                           0xff45d9ad, 0xffff5f9e, 0xffc8ef5f, 0xff63b8ff };
+        // Real Piano, House Piano, Deep Keys, Rhodes, Supersaw, Leads, Pads, Bass, Plucks
+        static const juce::uint32 c9[] = { 0xfff3e2c0, 0xffff9f2e, 0xffa98bff, 0xffff7a5a, 0xffff4fa3,
+                                           0xff6fe8ff, 0xff45e0b0, 0xff5c8dff, 0xffd0f25f };
         return juce::Colour (c9[juce::jlimit (0, 8, c)]);
     }
 }
@@ -37,8 +40,6 @@ public:
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh,
                        juce::ComboBox&) override;
     void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
-    void drawPopupMenuSectionHeaderWithOptions (juce::Graphics&, const juce::Rectangle<int>&, const juce::String&,
-                                                const juce::PopupMenu::Options&) override;
     juce::Font getComboBoxFont (juce::ComboBox&) override;
     juce::Font getPopupMenuFont() override;
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
@@ -87,13 +88,38 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> att;
 };
 
-// Top bar: [<]  [ CATEGORY  name  tag  v ]  [>]
+// Full-size sound browser: categories on the left, big sound tiles on the right.
+class SoundBrowser : public juce::Component
+{
+public:
+    explicit SoundBrowser (HouseKeysProcessor&);
+    void open();
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    std::function<void()> onClose;
+
+private:
+    struct Hit { juce::Rectangle<int> r; int category = -1, sound = -1; bool close = false; };
+    void layoutHits();
+    int hitAt (juce::Point<int>) const;
+
+    HouseKeysProcessor& proc;
+    int shownCategory = 0, hover = -1;
+    std::vector<Hit> hits;
+    juce::Rectangle<int> catArea, tileArea, closeArea;
+};
+
+// Top bar: [<]  [ CATEGORY  name  tag ]  [>]  [BROWSE]
 class SoundSelector : public juce::Component
 {
 public:
     explicit SoundSelector (HouseKeysProcessor&);
     void resized() override;
     void refresh();
+    std::function<void()> onBrowse;
 
 private:
     struct Arrow : public juce::Button
@@ -108,12 +134,16 @@ private:
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
         int sound = 0;
     };
-
-    void showMenu();
+    struct BrowseButton : public juce::Button
+    {
+        BrowseButton() : juce::Button ("browse") {}
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    };
 
     HouseKeysProcessor& proc;
     Arrow prev { true }, next { false };
     HostMenu<NameBox> name;
+    BrowseButton browse;
 };
 
 // Effect section card with an on/off switch
@@ -125,7 +155,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void refresh();
-    int units() const { return juce::jmax (2, (int) items.size()); }   // narrow cards still fit the title
+    int units() const { return juce::jmax (2, (int) items.size()); }
 
 private:
     juce::String title;
@@ -150,19 +180,22 @@ public:
 
 private:
     void timerCallback() override;
+    void drawMeter (juce::Graphics&);
 
     HouseKeysProcessor& proc;
     hkui::Look look;
 
     hkui::SoundSelector selector;
+    hkui::SoundBrowser browser;
     std::vector<std::unique_ptr<hkui::Knob>> mainKnobs;
     hkui::Knob* airKnob = nullptr;
     std::unique_ptr<hkui::Choice> chord;
     std::vector<std::unique_ptr<hkui::FxCard>> cards;
 
-    juce::Rectangle<int> soundArea, footer;
+    juce::Rectangle<int> soundArea, footer, meterArea;
     juce::String status;
     int lastSound = -1;
+    float levL = 0.0f, levR = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HouseKeysEditor)
 };

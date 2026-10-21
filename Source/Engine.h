@@ -130,6 +130,10 @@ private:
         // sampler
         const SampleZone* za = nullptr;
         float smpGain = 0;
+        const SampleZone* zo = nullptr;            // octave-up layer
+        float octGain = 0;
+        double posO = 0, incO = 1;
+        float glide = 1.0f, glideC = 0.0f;         // pitch ratio gliding toward 1 (mono legato)
         double pos = 0, inc = 1;
         bool undamped = false;
 
@@ -232,6 +236,16 @@ private:
                 v.smpGain = d.sampler.level * v.za->gain * dbToGain (d.sampler.dynamics * (std::sqrt (vel) - 1.0f));
             }
             v.undamped = pitch >= 89;   // the top strings of a grand have no dampers
+            if (d.sampler.octave > 0.0f && pitch + 12 <= 108)
+            {
+                const int ro = bank->rootIndexFor (pitch + 12);
+                v.zo = bank->zone (ro, std::max (0, layer - 1));
+                if (v.zo != nullptr)
+                {
+                    v.incO = std::pow (2.0, (pitch + 12 - v.zo->root) / 12.0) * v.zo->sampleRate / sr;
+                    v.octGain = d.sampler.octave * d.sampler.level * v.zo->gain * dbToGain (d.sampler.dynamics * (std::sqrt (vel) - 1.0f));
+                }
+            }
         }
         const bool useFallback = d.sampler.level > 0.0f && bank == nullptr && d.fallback.level > 0.0f;
         const AcousticDef* ac = useFallback ? &d.fallback : nullptr;
@@ -346,8 +360,9 @@ private:
                 v.vinc[1][u] = f * std::pow (2.0f, (va.semi2 * 100.0f + va.fine2 + cents * 1.1f) / 1200.0f) / fs;
                 // mono (bass) sounds start each waveform at its zero crossing -> clean, click-free starts
                 static const float zeroPh[4] = { 0.5f, 0.0f, 0.25f, 0.0f };   // saw, square, tri, sine
-                v.vph[0][u] = d.mono ? zeroPh[va.wave1] : 0.5f + 0.5f * v.rng.next();
-                v.vph[1][u] = d.mono ? zeroPh[va.wave2] : 0.5f + 0.5f * v.rng.next();
+                const bool clean = d.mono && v.uni == 1;
+                v.vph[0][u] = clean ? zeroPh[va.wave1] : 0.5f + 0.5f * v.rng.next();
+                v.vph[1][u] = clean ? zeroPh[va.wave2] : 0.5f + 0.5f * v.rng.next();
             }
             v.subInc = 0.5f * f / fs;
             v.driftInc = (0.12f + 0.2f * (0.5f + 0.5f * v.rng.next())) / fs;   // 0.12-0.32 Hz, different per voice
@@ -368,6 +383,13 @@ private:
             const float cents = 0.5f * va.detune * t;
             v.vinc[0][u] = f * std::pow (2.0f, cents / 1200.0f) / fs;
             v.vinc[1][u] = f * std::pow (2.0f, (va.semi2 * 100.0f + va.fine2 + cents * 1.1f) / 1200.0f) / fs;
+        }
+        const SoundDef& sd = sounds()[(size_t) v.sound];
+        if (sd.glideMs > 0.0f)
+        {
+            // continue from the pitch we are at now, then glide to the new note
+            v.glide *= noteHz (v.note) / f;
+            v.glideC = std::exp (-1.0f / (sd.glideMs * 0.001f * fs));
         }
         v.subInc = 0.5f * f / fs;
         v.note = note; v.trigger = note; v.vel = vel; v.order = ++counter;
@@ -446,8 +468,30 @@ private:
                 sd[i]  += 0.5f * (l - r);
                 pos += v.inc;
             }
-            v.pos = pos; v.extra = ex;
-            if (v.za != nullptr && ex > 1.0e-4f) alive = true; else v.za = nullptr;
+            v.pos = pos;
+            if (v.zo != nullptr)
+            {
+                const SampleZone& o = *v.zo;
+                double po = v.posO;
+                float exo = v.extra;
+                for (int i = 0; i < n; ++i)
+                {
+                    const int ip = (int) po;
+                    if (ip + 2 >= o.length) { v.zo = nullptr; break; }
+                    const float t = (float) (po - ip);
+                    const int i0 = std::max (0, ip - 1);
+                    const float g = v.octGain * exo;
+                    const float l = hermite (o.l (i0), o.l (ip), o.l (ip + 1), o.l (ip + 2), t) * g;
+                    const float r = hermite (o.r (i0), o.r (ip), o.r (ip + 1), o.r (ip + 2), t) * g;
+                    out[i] += 0.5f * (l + r);
+                    sd[i]  += 0.5f * (l - r);
+                    exo *= v.extraDecay;
+                    po += v.incO;
+                }
+                v.posO = po;
+            }
+            v.extra = ex;
+            if (v.za != nullptr && ex > 1.0e-4f) alive = true; else { v.za = nullptr; v.zo = nullptr; }
         }
 
         //---- keys
@@ -615,7 +659,8 @@ private:
                     const float fc = std::exp2 (std::clamp (baseOct + va.envAmt * v.fenv + mo, 4.3f, 14.2f));
                     for (auto& ch : v.vf) for (auto& st : ch) st.set (fc, q, fs);
                 }
-                const float drift = 1.0f + v.driftAmt * 0.000578f * std::sin (kTwoPi * v.driftPh);
+                v.glide = 1.0f + (v.glide - 1.0f) * v.glideC;
+                const float drift = (1.0f + v.driftAmt * 0.000578f * std::sin (kTwoPi * v.driftPh)) * v.glide;
                 float l = 0.0f, r = 0.0f;
                 for (int u = 0; u < v.uni; ++u)
                 {

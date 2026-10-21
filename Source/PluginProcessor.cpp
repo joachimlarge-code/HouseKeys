@@ -240,6 +240,10 @@ void HouseKeysProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     if (buffer.getNumChannels() == 1)
         for (int i = 0; i < numSamples; ++i) L[i] = 0.5f * (L[i] + R[i]);
+
+    float pl = 0.0f, pr = 0.0f;
+    for (int i = 0; i < numSamples; ++i) { pl = std::max (pl, std::abs (L[i])); pr = std::max (pr, std::abs (R[i])); }
+    meterL = std::max (pl, meterL.load()); meterR = std::max (pr, meterR.load());
 }
 
 //==============================================================================

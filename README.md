@@ -1,4 +1,4 @@
-# HouseKeys 3
+# HouseKeys 3.1
 
 Et house keys-instrument for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel).
 Ekte samplet flygel, friske house-pianoer, Rhodes, pads, bass, plucks og synth-akkorder,
@@ -21,20 +21,21 @@ Samme kommando oppdaterer til nyeste versjon.
 | Kategori | Lyder |
 |---|---|
 | **Real Piano** | Concert Grand · Intimate Felt · Ballad Grand |
-| **Fresh House Piano** | Fresh House Piano · Piano House 90s · Sunset Piano · Pumping Chords |
-| **Bright Keys** | Crystal Keys · Glass Bells |
-| **Deep House Keys** | Deep House Keys · UK Garage Keys · Deep Wide Stab · Short Organ Stab · Garage Organ |
-| **Warm Rhodes** | Warm Rhodes · Dream Wurli · Lo-fi Rhodes |
-| **Wide Pads** | Warm Pad · Air Pad · Dark Strings |
-| **House Bass** | Deep Sub · House Bass · Pluck Bass |
+| **House Piano** | Fresh House Piano · Big House Piano · Supersaw Piano · Saturated Piano · Piano House 90s · Sunset Piano · Pumping Chords |
+| **Deep House Keys** | Deep House Keys · UK Garage Keys · Deep Wide Stab · Short Organ Stab |
+| **Rhodes** | Warm Rhodes · Lo-fi Rhodes |
+| **Supersaw & Chords** | Supersaw Chords · Euphoric Supersaw · Supersaw Stab · Melodic Chords · Rave Stab |
+| **Leads** | Saw Lead · House Lead · Supersaw Lead (mono med glide) |
+| **Pads** | Warm Pad · Air Pad · Dark Strings |
+| **Bass** | Deep Sub · House Bass · Pluck Bass |
 | **Plucks** | House Pluck · Soft Pluck |
-| **Melodic Chords** | Melodic Chords · Supersaw Chords · Rave Stab |
 
-Bla med **pilene** øverst, eller trykk på navnet for en meny med alle lydene. Når du bytter
-lyd, settes alle knapper og effekter til den lydens egne innstillinger. Lagrede prosjekter
+Trykk **LYDER** (eller på navnet) for lydleseren: kategorier til venstre, lydene som store
+knapper til høyre. Pilene blar til forrige/neste lyd. Når du bytter lyd, settes alle knapper
+og effekter til den lydens egne innstillinger (Chord står alltid på Off). Lagrede prosjekter
 beholder dine egne justeringer.
 
-Alle lydene er nivåkalibrert (ca. −13,5 LUFS, pianoer −14,5, bass −17), så volumet hopper ikke når du bytter.
+Alle lydene er nivåkalibrert (ca. −13,5 LUFS, pianoer og leads −14,5, bass −17), så volumet hopper ikke når du bytter.
 
 ## Hvordan lydene lages
 
@@ -45,9 +46,10 @@ Alle lydene er nivåkalibrert (ca. −13,5 LUFS, pianoer −14,5, bass −17), s
   udempet som på et ekte flygel, og sustain-pedal fungerer.
 - **Rhodes/Wurli/bjeller** er FM-syntese med «bark» på hardt anslag.
 - **UK house keys** er additiv syntese tilpasset lydeksempler.
-- **Pads, bass, plucks og synth-akkorder** er virtuell analog: anti-aliased sagtann/firkant/trekant/sinus
+- **Big House Piano** stabler pianoet med seg selv en oktav opp, slik klassiske house-pianoer gjør.
+- **Pads, bass, plucks, leads og supersaws** er virtuell analog: anti-aliased sagtann/firkant/trekant/sinus
   med opptil 7 unison-stemmer, sub-oscillator, 4-polet filter med egen konvolutt og langsom
-  analog bevegelse. Bassene er mono med legato (ingen klikk mellom toner).
+  analog bevegelse. Bass og leads er mono med legato (ingen klikk mellom toner), og leadene har glide.
 
 ## Kontroller
 

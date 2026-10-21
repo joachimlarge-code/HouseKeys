@@ -62,6 +62,21 @@ std::vector<Ev> phraseFor (int category, int sr, double bpm, int& totalSamples)
             break;
         }
 
+        case hk::kCatLeads:
+        {
+            // legato melody (overlapping notes -> glide)
+            const int mel[] = { 69, 72, 74, 76, 74, 72, 71, 72,   69, 72, 74, 79, 76, 74, 72, 74 };
+            const int len[] = { 3, 2, 3, 4, 2, 2, 2, 6,           3, 2, 3, 4, 2, 2, 2, 6 };
+            int t = 0;
+            for (int k = 0; k < 16; ++k)
+            {
+                const int t0 = t * s16, t1 = (t + len[k]) * s16 + s16 / 3;   // slight overlap
+                addNote (e, t0, t1, mel[k], 0.85f);
+                t += len[k];
+            }
+            break;
+        }
+
         case hk::kCatPlucks:
             for (int b = 0; b < bars; ++b)
             {

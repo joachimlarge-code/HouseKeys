@@ -44,6 +44,11 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     std::atomic<float> meterL { 0.0f }, meterR { 0.0f };   // output peak for the UI meter
 
+    // Drag & drop: load any audio file as the "Ditt sample" sound. Message thread only.
+    bool loadUserSample (const juce::File& file, juce::String& message);
+    juce::String getUserSampleName() const { return userName; }
+    int getUserSampleRoot() const { return userRoot; }
+
 private:
     hk::Params readParams() const;
     void parameterChanged (const juce::String& id, float newValue) override;
@@ -56,6 +61,14 @@ private:
     hk::Engine engine;
     juce::AudioBuffer<float> scratch;
     std::atomic<int> appliedSound { hk::kDefaultSound };   // sound whose defaults are currently loaded
+
+    void installUserSample (juce::AudioBuffer<float> prepared, double sr, int root, const juce::String& name);
+    std::vector<std::unique_ptr<hk::SampleBank>> userBanks;  // kept alive: voices may still read old ones
+    std::atomic<const hk::SampleBank*> userBank { nullptr };
+    juce::String userName;
+    int userRoot = 60;
+    juce::MemoryBlock userFlac;
+    double userRate = 48000.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HouseKeysProcessor)
 };

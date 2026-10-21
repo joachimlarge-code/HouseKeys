@@ -24,10 +24,10 @@ namespace col
 
     inline juce::Colour category (int c)
     {
-        // Real Piano, House Piano, Deep Keys, Rhodes, Supersaw, Leads, Pads, Bass, Plucks
-        static const juce::uint32 c9[] = { 0xfff3e2c0, 0xffff9f2e, 0xffa98bff, 0xffff7a5a, 0xffff4fa3,
-                                           0xff6fe8ff, 0xff45e0b0, 0xff5c8dff, 0xffd0f25f };
-        return juce::Colour (c9[juce::jlimit (0, 8, c)]);
+        // Real Piano, House Piano, Deep Keys, Rhodes, Supersaw, Synths, Leads, Pads, Bass, Plucks, Your sample
+        static const juce::uint32 cc[] = { 0xfff3e2c0, 0xffff9f2e, 0xffa98bff, 0xffff7a5a, 0xffff4fa3,
+                                           0xffffd84a, 0xff6fe8ff, 0xff45e0b0, 0xff5c8dff, 0xffd0f25f, 0xffffffff };
+        return juce::Colour (cc[juce::jlimit (0, 10, c)]);
     }
 }
 
@@ -133,6 +133,7 @@ private:
         NameBox() : juce::Button ("sound") {}
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
         int sound = 0;
+        juce::String userName;
     };
     struct BrowseButton : public juce::Button
     {
@@ -167,9 +168,15 @@ private:
 } // namespace hkui
 
 //==============================================================================
-class HouseKeysEditor : public juce::AudioProcessorEditor, private juce::Timer
+class HouseKeysEditor : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer
 {
 public:
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void fileDragEnter (const juce::StringArray&, int, int) override { dragging = true; repaint(); }
+    void fileDragExit (const juce::StringArray&) override { dragging = false; repaint(); }
+    void filesDropped (const juce::StringArray& files, int, int) override;
+    void paintOverChildren (juce::Graphics&) override;
+
     explicit HouseKeysEditor (HouseKeysProcessor&);
     ~HouseKeysEditor() override;
 
@@ -196,6 +203,9 @@ private:
     juce::String status;
     int lastSound = -1;
     float levL = 0.0f, levR = 0.0f;
+    bool dragging = false;
+    juce::String dropMessage;
+    int dropMessageTicks = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HouseKeysEditor)
 };

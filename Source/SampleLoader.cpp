@@ -206,3 +206,158 @@ std::unique_ptr<hk::SampleBank> loadBuiltIn()
     return bank;
 }
 } // namespace SampleLibrary
+
+//==============================================================================
+namespace UserSample
+{
+bool decode (const juce::File& file, juce::AudioBuffer<float>& out, double& sampleRate, juce::String& error)
+{
+    juce::AudioFormatManager fm;
+    fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (file));
+    if (reader == nullptr) { error = "Kan ikke lese denne filtypen"; return false; }
+    if (reader->lengthInSamples <= 0) { error = "Filen er tom"; return false; }
+    const int len = (int) juce::jmin<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 60.0));
+    out.setSize ((int) juce::jlimit (1u, 2u, reader->numChannels), len);
+    reader->read (&out, 0, len, 0, true, out.getNumChannels() > 1);
+    sampleRate = reader->sampleRate;
+    return true;
+}
+
+void prepare (juce::AudioBuffer<float>& audio, double sr)
+{
+    // stereo
+    if (audio.getNumChannels() == 1)
+    {
+        juce::AudioBuffer<float> st (2, audio.getNumSamples());
+        st.copyFrom (0, 0, audio, 0, 0, audio.getNumSamples());
+        st.copyFrom (1, 0, audio, 0, 0, audio.getNumSamples());
+        audio = std::move (st);
+    }
+    const int n = audio.getNumSamples();
+    const float peak = juce::jmax (audio.getMagnitude (0, 0, n), 1.0e-6f);
+
+    // remove silence before the sound starts (keep 1 ms)
+    int start = 0;
+    const float thr = peak * 0.01f;
+    while (start < n && std::abs (audio.getSample (0, start)) < thr && std::abs (audio.getSample (1, start)) < thr) ++start;
+    start = juce::jmax (0, start - (int) (0.001 * sr));
+
+    // remove silence at the end, max 20 s
+    int end = n;
+    const float endThr = peak * 0.0005f;
+    while (end > start + 1 && std::abs (audio.getSample (0, end - 1)) < endThr && std::abs (audio.getSample (1, end - 1)) < endThr) --end;
+    end = juce::jmin (end, start + (int) (20.0 * sr));
+
+    const int len = juce::jmax (1, end - start);
+    juce::AudioBuffer<float> out (2, len);
+    for (int c = 0; c < 2; ++c) out.copyFrom (c, 0, audio, c, start, len);
+
+    // short fades so it never clicks
+    const int fin = juce::jmin (len / 4, (int) (0.0015 * sr)), fout = juce::jmin (len / 4, (int) (0.02 * sr));
+    out.applyGainRamp (0, fin, 0.0f, 1.0f);
+    out.applyGainRamp (len - fout, fout, 1.0f, 0.0f);
+
+    // consistent level: RMS of the first 300 ms to about -16 dBFS, peak never above -1 dBFS
+    const int m = juce::jmin (len, (int) (0.3 * sr));
+    double sum = 0.0;
+    for (int c = 0; c < 2; ++c) { const float* p = out.getReadPointer (c); for (int i = 0; i < m; ++i) sum += (double) p[i] * p[i]; }
+    const float rms = (float) std::sqrt (sum / (2.0 * juce::jmax (1, m)));
+    float g = rms > 1.0e-6f ? 0.158f / rms : 1.0f;
+    g = juce::jmin (g, 0.89f / juce::jmax (out.getMagnitude (0, 0, len), 1.0e-6f));
+    out.applyGain (g);
+    audio = std::move (out);
+}
+
+int detectRootNote (const juce::AudioBuffer<float>& audio, double sr)
+{
+    // analyse ~100 ms of the steady part (skip the attack)
+    const int skip = (int) (0.04 * sr), W = juce::jmin (4096, (int) (0.1 * sr));
+    if (audio.getNumSamples() < skip + 2 * W) return -1;
+    std::vector<float> x ((size_t) (2 * W));
+    for (int i = 0; i < 2 * W; ++i)
+        x[(size_t) i] = 0.5f * (audio.getSample (0, skip + i) + audio.getSample (audio.getNumChannels() > 1 ? 1 : 0, skip + i));
+
+    const int tauMin = (int) (sr / 2000.0), tauMax = juce::jmin (W - 1, (int) (sr / 30.0));
+    std::vector<float> d ((size_t) tauMax + 1, 0.0f), cmnd ((size_t) tauMax + 1, 1.0f);
+    for (int tau = 1; tau <= tauMax; ++tau)
+    {
+        double s = 0.0;
+        for (int i = 0; i < W; ++i) { const float diff = x[(size_t) i] - x[(size_t) (i + tau)]; s += (double) diff * diff; }
+        d[(size_t) tau] = (float) s;
+    }
+    double running = 0.0;
+    for (int tau = 1; tau <= tauMax; ++tau)
+    {
+        running += d[(size_t) tau];
+        cmnd[(size_t) tau] = running > 0.0 ? (float) (d[(size_t) tau] * tau / running) : 1.0f;
+    }
+    int best = -1;
+    for (int tau = tauMin; tau < tauMax; ++tau)
+        if (cmnd[(size_t) tau] < 0.15f)
+        {
+            while (tau + 1 < tauMax && cmnd[(size_t) tau + 1] < cmnd[(size_t) tau]) ++tau;
+            best = tau;
+            break;
+        }
+    if (best < 0) return -1;   // noise / drums: no clear pitch
+    // parabolic interpolation
+    float t = (float) best;
+    if (best > 1 && best < tauMax)
+    {
+        const float a = cmnd[(size_t) best - 1], b = cmnd[(size_t) best], c = cmnd[(size_t) best + 1];
+        const float den = a - 2.0f * b + c;
+        if (std::abs (den) > 1.0e-9f) t += 0.5f * (a - c) / den;
+    }
+    const double f0 = sr / t;
+    return juce::jlimit (12, 120, (int) std::lround (69.0 + 12.0 * std::log2 (f0 / 440.0)));
+}
+
+std::unique_ptr<hk::SampleBank> makeBank (const juce::AudioBuffer<float>& audio, double sr, int rootNote)
+{
+    auto bank = std::make_unique<hk::SampleBank>();
+    bank->name = "Ditt sample";
+    hk::SampleZone z;
+    z.root = rootNote; z.layer = 0; z.sampleRate = sr; z.length = audio.getNumSamples();
+    z.data.resize ((size_t) z.length * 2);
+    const float* l = audio.getReadPointer (0);
+    const float* r = audio.getReadPointer (audio.getNumChannels() > 1 ? 1 : 0);
+    for (int i = 0; i < z.length; ++i)
+    {
+        z.data[(size_t) i * 2]     = (int16_t) juce::jlimit (-32767, 32767, juce::roundToInt (l[i] * 32767.0f));
+        z.data[(size_t) i * 2 + 1] = (int16_t) juce::jlimit (-32767, 32767, juce::roundToInt (r[i] * 32767.0f));
+    }
+    bank->zones.push_back (std::move (z));
+    bank->finalise();
+    return bank;
+}
+
+juce::MemoryBlock encodeFlac (const juce::AudioBuffer<float>& audio, double sr)
+{
+    juce::MemoryBlock mb;
+    juce::FlacAudioFormat flac;
+    auto* os = new juce::MemoryOutputStream (mb, false);
+    std::unique_ptr<juce::AudioFormatWriter> w (flac.createWriterFor (os, sr, (unsigned int) audio.getNumChannels(), 16, {}, 5));
+    if (w == nullptr) { delete os; return {}; }
+    w->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
+    w.reset();   // flushes and deletes the stream
+    return mb;
+}
+
+bool decodeFlac (const juce::MemoryBlock& data, juce::AudioBuffer<float>& out, double& sr)
+{
+    juce::FlacAudioFormat flac;
+    std::unique_ptr<juce::AudioFormatReader> reader (flac.createReaderFor (new juce::MemoryInputStream (data, false), true));
+    if (reader == nullptr || reader->lengthInSamples <= 0) return false;
+    out.setSize ((int) reader->numChannels, (int) reader->lengthInSamples);
+    reader->read (&out, 0, out.getNumSamples(), 0, true, true);
+    sr = reader->sampleRate;
+    return true;
+}
+
+juce::String noteName (int midi)
+{
+    static const char* n[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    return juce::String (n[((midi % 12) + 12) % 12]) + juce::String (midi / 12 - 1);
+}
+} // namespace UserSample

@@ -164,6 +164,40 @@ int main (int argc, char** argv)
     std::vector<float> AL, AR, L, R;
     double cpu = 0, audio = 0;
 
+    if (const char* us = std::getenv ("HK_USER_SAMPLE"))   // test the drag & drop pipeline
+    {
+        juce::AudioBuffer<float> a; double usr = 44100; juce::String err;
+        if (! UserSample::decode (juce::File (us), a, usr, err)) { std::printf ("decode failed: %s\n", err.toRawUTF8()); return 1; }
+        const int inLen = a.getNumSamples();
+        UserSample::prepare (a, usr);
+        const int root = UserSample::detectRootNote (a, usr);
+        auto flac = UserSample::encodeFlac (a, usr);
+        juce::AudioBuffer<float> back; double bsr = 0;
+        const bool rt = UserSample::decodeFlac (flac, back, bsr);
+        std::printf ("user sample: %d -> %d frames, root %d (%s), flac %d bytes, roundtrip %s (%d frames, %.0f Hz)\n",
+                     inLen, a.getNumSamples(), root, root >= 0 ? UserSample::noteName (root).toRawUTF8() : "none",
+                     (int) flac.getSize(), rt ? "ok" : "FAILED", back.getNumSamples(), bsr);
+        auto ub = UserSample::makeBank (back, bsr, root >= 0 ? root : 60);
+        hk::Params prm = hk::sounds()[(size_t) hk::kDroppedSample].preset;
+        std::vector<Ev> e;
+        for (int k = 0; k < 4; ++k) addNote (e, k * sr / 2, k * sr / 2 + sr / 3, 57 + k * 4, 0.9f);
+        std::stable_sort (e.begin(), e.end(), [] (const Ev& x, const Ev& y) { return x.t != y.t ? x.t < y.t : (! x.on && y.on); });
+        hk::Engine eng; eng.setParams (prm); eng.prepare (sr, 256); eng.setUserBank (ub.get());
+        const int total = 4 * sr;
+        L.assign ((size_t) total, 0.0f); R.assign ((size_t) total, 0.0f);
+        size_t ei = 0; int pos = 0;
+        while (pos < total)
+        {
+            int end = std::min (total, pos + 256);
+            while (ei < e.size() && e[ei].t <= pos) { if (e[ei].on) eng.noteOn (e[ei].note, e[ei].vel); else eng.noteOff (e[ei].note); ++ei; }
+            if (ei < e.size() && e[ei].t < end) end = e[ei].t;
+            eng.process (L.data() + pos, R.data() + pos, end - pos, bpm, 0, true);
+            pos = end;
+        }
+        writeWav (out, L, R, sr);
+        return 0;
+    }
+
     if (argc > 4)   // chord test
     {
         hk::Params prm = hk::sounds()[(size_t) only].preset;

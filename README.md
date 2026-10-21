@@ -1,4 +1,4 @@
-# HouseKeys 3.1
+# HouseKeys 3.2
 
 Et house keys-instrument for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel).
 Ekte samplet flygel, friske house-pianoer, Rhodes, pads, bass, plucks og synth-akkorder,
@@ -20,15 +20,17 @@ Samme kommando oppdaterer til nyeste versjon.
 
 | Kategori | Lyder |
 |---|---|
-| **Real Piano** | Concert Grand · Intimate Felt · Ballad Grand |
-| **House Piano** | Fresh House Piano · Big House Piano · Supersaw Piano · Saturated Piano · Piano House 90s · Sunset Piano · Pumping Chords |
+| **Real Piano** | Concert Grand · Intimate Felt · Ballad Grand · Octave Grand · Deep Night Piano |
+| **House Piano** | Fresh House Piano · Big House Piano · Bright Piano · Supersaw Piano · Saturated Piano · Lo-fi House Piano · Piano House 90s · Sunset Piano · Pumping Chords |
 | **Deep House Keys** | Deep House Keys · UK Garage Keys · Deep Wide Stab · Short Organ Stab |
 | **Rhodes** | Warm Rhodes · Lo-fi Rhodes |
 | **Supersaw & Chords** | Supersaw Chords · Euphoric Supersaw · Supersaw Stab · Melodic Chords · Rave Stab |
-| **Leads** | Saw Lead · House Lead · Supersaw Lead (mono med glide) |
+| **Synths** | Poly Synth · Analog Brass · Juno Strings · Hollow Synth |
+| **Leads** | Fat Saw Lead · Saw Lead · Octave Saw Lead · Wide Saw Lead · Scream Lead · House Lead · Supersaw Lead (mono med glide) |
 | **Pads** | Warm Pad · Air Pad · Dark Strings |
-| **Bass** | Deep Sub · House Bass · Pluck Bass |
-| **Plucks** | House Pluck · Soft Pluck |
+| **Bass** | Deep Sub · House Bass · Reese Bass · Organ Bass · Saw Bass · Acid Bass · Pluck Bass |
+| **Plucks** | House Pluck · Bright Pluck · Supersaw Pluck · Mallet Pluck · Deep Pluck · Soft Pluck |
+| **Ditt sample** | Dra en lydfil inn i pluginen (se under) |
 
 Trykk **LYDER** (eller på navnet) for lydleseren: kategorier til venstre, lydene som store
 knapper til høyre. Pilene blar til forrige/neste lyd. Når du bytter lyd, settes alle knapper
@@ -64,8 +66,18 @@ Alle lydene er nivåkalibrert (ca. −13,5 LUFS, pianoer og leads −14,5, bass 
 
 **Effekter** (hver med ON/OFF): Filter · Saturation · Chorus · Delay (følger tempoet) · Reverb · Pump (sidechain i takt)
 
-**Høyreklikk** på en kontroll gir FL Studios meny med **Create automation clip**.
-Dobbeltklikk tilbakestiller.
+**Vibrato** (egen seksjon med Rate og Depth). Mod-hjulet på keyboardet gir også vibrato.
+
+**Automation:** høyreklikk på en knapp. Da merkes den som «sist vridd» i FL Studio, og menyen viser veien:
+**Tools → Last tweaked → Create automation clip** (eller **Add → Automation from last tweaked parameter**).
+FL Studio lar ikke plugins lage clipet selv, så dette er den raskeste veien.
+
+## Ditt sample (dra og slipp)
+
+Dra en lydfil (wav, aiff, flac, ogg, mp3) fra Finder eller FL-browseren rett inn i pluginen.
+Den fjerner stillhet, jevner ut nivået, finner grunntonen automatisk og gjør lyden spillbar over
+hele klaviaturet med alle effektene. Samplet lagres i FL-prosjektet. Lyder uten tydelig tone
+(trommer o.l.) spilles fra C4.
 
 ## Bruke egne pianosamples
 

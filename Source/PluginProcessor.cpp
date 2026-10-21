@@ -49,13 +49,14 @@ float presetValue (const hk::Params& q, const juce::String& id)
     if (id == "delayFb") return q.delayFeedback; if (id == "delayMix") return q.delayMix;
     if (id == "reverbOn") return q.reverbOn;    if (id == "reverbSize") return q.reverbSize; if (id == "reverbMix") return q.reverbMix;
     if (id == "pumpOn") return q.pumpOn;        if (id == "pumpRate") return (float) q.pumpRate; if (id == "pumpDepth") return q.pumpDepth;
+    if (id == "vibOn") return q.vibOn;          if (id == "vibRate") return q.vibRate;   if (id == "vibDepth") return q.vibDepth;
     return 0.0f;
 }
 
 const char* const kResetIds[] = { "tone", "air", "attack", "decay", "release", "width", "volume", "chord",
                                   "filterOn", "cutoff", "reso", "satOn", "satDrive", "chorusOn", "chorusMix",
                                   "delayOn", "delayTime", "delayFb", "delayMix", "reverbOn", "reverbSize", "reverbMix",
-                                  "pumpOn", "pumpRate", "pumpDepth" };
+                                  "pumpOn", "pumpRate", "pumpDepth", "vibOn", "vibRate", "vibDepth" };
 } // namespace
 
 //==============================================================================
@@ -98,6 +99,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout HouseKeysProcessor::createLa
     l.add (bparam ("pumpOn", "Pump On", d.pumpOn));
     l.add (cparam ("pumpRate", "Pump Rate", { "1/4", "1/8", "1/16" }, d.pumpRate));
     l.add (fparam ("pumpDepth", "Pump Depth", Range (0.0f, 1.0f), d.pumpDepth, pct()));
+
+    l.add (bparam ("vibOn", "Vibrato On", d.vibOn));
+    l.add (fparam ("vibRate",  "Vibrato Rate",  skewed (0.5f, 12.0f, 5.0f), d.vibRate,
+                   [] (float v, int) { return juce::String (v, 1) + " Hz"; }));
+    l.add (fparam ("vibDepth", "Vibrato Depth", Range (0.0f, 1.0f), d.vibDepth, pct()));
     return l;
 }
 
@@ -186,6 +192,7 @@ hk::Params HouseKeysProcessor::readParams() const
     p.delayFeedback = raw ("delayFb");    p.delayMix = raw ("delayMix");
     p.reverbOn = raw ("reverbOn") > 0.5f; p.reverbSize = raw ("reverbSize"); p.reverbMix = raw ("reverbMix");
     p.pumpOn   = raw ("pumpOn") > 0.5f;   p.pumpRate = (int) raw ("pumpRate"); p.pumpDepth = raw ("pumpDepth");
+    p.vibOn    = raw ("vibOn") > 0.5f;    p.vibRate = raw ("vibRate");         p.vibDepth = raw ("vibDepth");
     return p;
 }
 
@@ -196,6 +203,7 @@ void HouseKeysProcessor::handleMidi (const juce::MidiMessage& m)
     else if (m.isSustainPedalOn())   engine.setSustainPedal (true);
     else if (m.isSustainPedalOff())  engine.setSustainPedal (false);
     else if (m.isAllNotesOff() || m.isAllSoundOff()) engine.allNotesOff();
+    else if (m.isController() && m.getControllerNumber() == 1) engine.setModWheel ((float) m.getControllerValue() / 127.0f);
 }
 
 void HouseKeysProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -205,6 +213,7 @@ void HouseKeysProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     buffer.clear();
     engine.setParams (readParams());
     engine.setSampleBank (SampleLibrary::get());
+    engine.setUserBank (userBank.load());
 
     double bpm = 120.0, ppq = 0.0;
     bool playing = false;
@@ -257,9 +266,43 @@ const juce::String HouseKeysProcessor::getProgramName (int index)
 
 void HouseKeysProcessor::setCurrentProgram (int index) { selectSound (index); }
 
+bool HouseKeysProcessor::loadUserSample (const juce::File& file, juce::String& message)
+{
+    juce::AudioBuffer<float> audio;
+    double sr = 44100.0;
+    if (! UserSample::decode (file, audio, sr, message)) return false;
+    UserSample::prepare (audio, sr);
+    const int detected = UserSample::detectRootNote (audio, sr);
+    const int root = detected >= 0 ? detected : 60;
+    installUserSample (std::move (audio), sr, root, file.getFileNameWithoutExtension());
+    message = detected >= 0 ? "Grunntone funnet: " + UserSample::noteName (root)
+                            : juce::String::fromUTF8 ("Ingen tydelig tone \xe2\x80\x93 spilles fra C4");
+    selectSound (hk::kDroppedSample);
+    return true;
+}
+
+void HouseKeysProcessor::installUserSample (juce::AudioBuffer<float> prepared, double sr, int root, const juce::String& name)
+{
+    userFlac = UserSample::encodeFlac (prepared, sr);
+    userRate = sr;
+    userRoot = root;
+    userName = name;
+    userBanks.push_back (UserSample::makeBank (prepared, sr, root));
+    userBank.store (userBanks.back().get());
+}
+
 void HouseKeysProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary (*xml, destData);
+    auto state = apvts.copyState();
+    if (userFlac.getSize() > 0)   // the dropped sample travels with the project
+    {
+        juce::ValueTree us ("UserSample");
+        us.setProperty ("name", userName, nullptr);
+        us.setProperty ("root", userRoot, nullptr);
+        us.setProperty ("data", userFlac.toBase64Encoding(), nullptr);
+        state.appendChild (us, nullptr);
+    }
+    if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
 
 void HouseKeysProcessor::setStateInformation (const void* data, int sizeInBytes)
@@ -272,6 +315,19 @@ void HouseKeysProcessor::setStateInformation (const void* data, int sizeInBytes)
             for (auto child : tree)
                 if (child.getProperty ("id").toString() == "sound")
                     appliedSound = (int) child.getProperty ("value");
+            auto us = tree.getChildWithName ("UserSample");
+            if (us.isValid())
+            {
+                juce::MemoryBlock mb;
+                if (mb.fromBase64Encoding (us.getProperty ("data").toString()))
+                {
+                    juce::AudioBuffer<float> audio;
+                    double sr = 48000.0;
+                    if (UserSample::decodeFlac (mb, audio, sr))
+                        installUserSample (std::move (audio), sr, (int) us.getProperty ("root", 60), us.getProperty ("name").toString());
+                }
+                tree.removeChild (us, nullptr);
+            }
             apvts.replaceState (tree);
             cancelPendingUpdate();
         }

@@ -25,3 +25,25 @@ namespace SampleLibrary
     std::unique_ptr<hk::SampleBank> loadFromFolder (const juce::File& folder);
     std::unique_ptr<hk::SampleBank> loadBuiltIn();
 }
+
+// Drag & drop: turns any audio file into a playable instrument.
+namespace UserSample
+{
+    // Reads an audio file (wav, aiff, flac, ogg, mp3 where supported). Returns false + message on error.
+    bool decode (const juce::File& file, juce::AudioBuffer<float>& out, double& sampleRate, juce::String& error);
+
+    // Trims silence, limits the length, fades the end and sets a consistent level.
+    void prepare (juce::AudioBuffer<float>& audio, double sampleRate);
+
+    // Fundamental frequency -> nearest MIDI note (YIN). Returns -1 if the sound has no clear pitch.
+    int detectRootNote (const juce::AudioBuffer<float>& audio, double sampleRate);
+
+    // One-zone bank playing the sample chromatically around its root note.
+    std::unique_ptr<hk::SampleBank> makeBank (const juce::AudioBuffer<float>& audio, double sampleRate, int rootNote);
+
+    // FLAC round trip so the sample can be stored inside the FL Studio project.
+    juce::MemoryBlock encodeFlac (const juce::AudioBuffer<float>& audio, double sampleRate);
+    bool decodeFlac (const juce::MemoryBlock& data, juce::AudioBuffer<float>& out, double& sampleRate);
+
+    juce::String noteName (int midi);
+}

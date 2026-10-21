@@ -54,7 +54,7 @@ void drawPanel (juce::Graphics& g, juce::Rectangle<int> area, const juce::String
     }
 }
 
-constexpr int kW = 1140, kH = 660;
+constexpr int kW = 1220, kH = 660;
 } // namespace
 
 //==============================================================================
@@ -65,20 +65,34 @@ void hkui::showParameterMenu (juce::Component& c, const juce::String& paramID)
     auto* param = dynamic_cast<juce::RangedAudioParameter*> (ed->getProcessor().apvts.getParameter (paramID));
     if (param == nullptr) return;
 
+    // 1) "touch" the parameter: the host now sees it as the last tweaked control, so in FL Studio
+    //    Tools > Last tweaked > Create automation clip points straight at it.
+    {
+        const float v = param->getValue();
+        const float nudge = v < 0.5f ? 1.0e-4f : -1.0e-4f;
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (v + nudge);
+        param->setValueNotifyingHost (v);
+        param->endChangeGesture();
+    }
+
+    // 2) the host's own menu, when it offers one ("Create automation clip", "Link to controller", ...)
     if (auto* ctx = ed->getHostContext())
         if (auto menu = ctx->getContextMenuForParameter (param))
-        {
-            menu->showNativeMenu (ed->getMouseXYRelative());
-            return;
-        }
+            if (menu->getEquivalentPopupMenu().getNumItems() > 0)
+            {
+                menu->showNativeMenu (ed->getMouseXYRelative());
+                return;
+            }
 
+    // 3) our own menu
     juce::PopupMenu m;
     m.setLookAndFeel (&ed->getLookAndFeel());
-    m.addSectionHeader (param->getName (64));
-    m.addItem (1, utf8 ("Tilbakestill til lydens standard"));
+    m.addSectionHeader (param->getName (64).toUpperCase() + utf8 ("  \xe2\x80\x93  klar for automation"));
+    m.addItem (2, utf8 ("Lag automation clip i FL:  Tools  \xe2\x96\xb8  Last tweaked  \xe2\x96\xb8  Create automation clip"), false, false);
+    m.addItem (3, utf8 ("eller:  Add  \xe2\x96\xb8  Automation from last tweaked parameter"), false, false);
     m.addSeparator();
-    m.addItem (2, utf8 ("Automation: vri p\xc3\xa5 kontrollen, og velg i FL"), false, false);
-    m.addItem (3, utf8 ("Tools > Last tweaked > Create automation clip"), false, false);
+    m.addItem (1, utf8 ("Tilbakestill til lydens standard"));
     juce::Component::SafePointer<HouseKeysEditor> safe (ed);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&c),
                      [safe, paramID] (int r) { if (r == 1 && safe != nullptr) safe->getProcessor().resetToSoundDefault (paramID); });
@@ -288,7 +302,7 @@ void SoundBrowser::layoutHits()
         hits.push_back ({ catArea.withHeight (ch - 6).translated (0, c * ch), c, -1, false });
 
     int n = 0;
-    const int cols = 3, tw = (tileArea.getWidth() - (cols - 1) * 12) / cols, th = 74;
+    const int cols = 3, tw = (tileArea.getWidth() - (cols - 1) * 12) / cols, th = 58;
     for (int i = 0; i < hk::kNumSounds; ++i)
     {
         if (hk::sounds()[(size_t) i].category != shownCategory) continue;
@@ -401,13 +415,12 @@ void SoundBrowser::paint (juce::Graphics& g)
         g.drawRoundedRectangle (r.reduced (0.5f), 12.0f, isCur ? 2.0f : 1.0f);
         g.setColour (c);
         g.fillRoundedRectangle (r.getX() + 12.0f, r.getY() + 14.0f, 4.0f, r.getHeight() - 28.0f, 2.0f);
-        auto t = r.reduced (28.0f, 12.0f);
         g.setColour (col::text);
         g.setFont (uiFont (17.0f, true));
-        g.drawFittedText (utf8 (d.name), t.removeFromTop (t.getHeight() * 0.55f).toNearestInt(), juce::Justification::bottomLeft, 1, 0.8f);
-        g.setColour (col::dim);
-        g.setFont (uiFont (12.5f));
-        g.drawFittedText (utf8 (d.tag), t.toNearestInt(), juce::Justification::topLeft, 1, 0.8f);
+        auto tileName = utf8 (d.name);
+        if (d.sampler.user) tileName = proc.getUserSampleName().isNotEmpty() ? proc.getUserSampleName()
+                                                                             : utf8 ("Dra en lydfil inn i pluginen");
+        g.drawFittedText (tileName, r.reduced (28.0f, 8.0f).toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
     }
 }
 
@@ -430,7 +443,8 @@ SoundSelector::SoundSelector (HouseKeysProcessor& p) : proc (p)
 void SoundSelector::refresh()
 {
     const int cur = proc.getCurrentProgram();
-    if (name.sound != cur) { name.sound = cur; name.repaint(); }
+    const auto un = proc.getUserSampleName();
+    if (name.sound != cur || name.userName != un) { name.sound = cur; name.userName = un; name.repaint(); }
 }
 
 void SoundSelector::resized()
@@ -478,14 +492,11 @@ void SoundSelector::NameBox::paintButton (juce::Graphics& g, bool highlighted, b
     g.setColour (c);
     g.drawText (juce::String (hk::categoryName (d.category)).toUpperCase(), top, juce::Justification::bottomLeft);
     auto nameArea = t.toNearestInt();
-    const auto nm = utf8 (d.name);
+    auto nm = utf8 (d.name);
+    if (d.sampler.user) nm = userName.isNotEmpty() ? userName : utf8 ("Dra en lydfil inn hit");
     g.setFont (uiFont (23.0f, true));
     g.setColour (col::text);
     g.drawText (nm, nameArea, juce::Justification::centredLeft);
-    const int nameW = juce::GlyphArrangement::getStringWidthInt (uiFont (23.0f, true), nm);
-    g.setFont (uiFont (13.0f));
-    g.setColour (col::dim);
-    g.drawText (utf8 (d.tag), nameArea.withTrimmedLeft (nameW + 14), juce::Justification::centredLeft);
 }
 
 void SoundSelector::BrowseButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
@@ -571,13 +582,13 @@ HouseKeysEditor::HouseKeysEditor (HouseKeysProcessor& p)
     chord = std::make_unique<Choice> (s, "chord", "Chord");
     addAndMakeVisible (*chord);
 
-    auto knob   = [&s] (const char* id, const char* t) { return std::make_unique<Knob> (s, id, t, 88); };
+    auto knob   = [&s] (const char* id, const char* t) { return std::make_unique<Knob> (s, id, t, 80); };
     auto choice = [&s] (const char* id, const char* t) { return std::make_unique<Choice> (s, id, t); };
 
     auto filter = std::make_unique<FxCard> (s, "Filter", "filterOn");
     filter->add (knob ("cutoff", "Cutoff"));
     filter->add (knob ("reso", "Reso"));
-    auto sat = std::make_unique<FxCard> (s, "Saturation", "satOn");
+    auto sat = std::make_unique<FxCard> (s, "Saturate", "satOn");
     sat->add (knob ("satDrive", "Drive"));
     auto chorus = std::make_unique<FxCard> (s, "Chorus", "chorusOn");
     chorus->add (knob ("chorusMix", "Mix"));
@@ -591,8 +602,11 @@ HouseKeysEditor::HouseKeysEditor (HouseKeysProcessor& p)
     auto pump = std::make_unique<FxCard> (s, "Pump", "pumpOn");
     pump->add (choice ("pumpRate", "Rate"));
     pump->add (knob ("pumpDepth", "Depth"));
+    auto vib = std::make_unique<FxCard> (s, "Vibrato", "vibOn");
+    vib->add (knob ("vibRate", "Rate"));
+    vib->add (knob ("vibDepth", "Depth"));
 
-    for (auto* c : { &filter, &sat, &chorus, &delay, &reverb, &pump })
+    for (auto* c : { &filter, &sat, &chorus, &vib, &delay, &reverb, &pump })
     {
         cards.push_back (std::move (*c));
         addAndMakeVisible (*cards.back());
@@ -636,6 +650,7 @@ void HouseKeysEditor::timerCallback()
 
     const auto st = SampleLibrary::statusText();
     if (st != status) { status = st; repaint (footer); }
+    if (dropMessageTicks > 0 && --dropMessageTicks == 0) repaint (footer);
 }
 
 void HouseKeysEditor::drawMeter (juce::Graphics& g)
@@ -659,6 +674,50 @@ void HouseKeysEditor::drawMeter (juce::Graphics& g)
 }
 
 //==============================================================================
+bool HouseKeysEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto& f : files)
+        if (juce::File (f).hasFileExtension ("wav;aif;aiff;flac;ogg;mp3;m4a;caf")) return true;
+    return false;
+}
+
+void HouseKeysEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    dragging = false;
+    for (auto& f : files)
+    {
+        juce::File file (f);
+        if (! file.hasFileExtension ("wav;aif;aiff;flac;ogg;mp3;m4a;caf")) continue;
+        juce::String msg;
+        const bool ok = proc.loadUserSample (file, msg);
+        dropMessage = ok ? file.getFileName() + "  \xc2\xb7  " + msg : "Kunne ikke laste " + file.getFileName() + ": " + msg;
+        dropMessage = juce::String::fromUTF8 (dropMessage.toRawUTF8());
+        dropMessageTicks = 30 * 6;
+        break;
+    }
+    selector.refresh();
+    repaint();
+}
+
+void HouseKeysEditor::paintOverChildren (juce::Graphics& g)
+{
+    if (! dragging) return;
+    auto r = getLocalBounds().toFloat().reduced (14.0f);
+    g.setColour (juce::Colour (0xe00a0810));
+    g.fillRoundedRectangle (r, 18.0f);
+    const float dash[] = { 10.0f, 8.0f };
+    juce::Path p; p.addRoundedRectangle (r.reduced (6.0f), 16.0f);
+    juce::Path dashed; juce::PathStrokeType (2.5f).createDashedStroke (dashed, p, dash, 2);
+    g.setColour (col::accent);
+    g.fillPath (dashed);
+    g.setFont (uiFont (32.0f, true));
+    g.drawText (utf8 ("Slipp lyden her"), r.withTrimmedBottom (40.0f).toNearestInt(), juce::Justification::centred);
+    g.setColour (col::dim);
+    g.setFont (uiFont (15.0f));
+    g.drawText (utf8 ("Grunntonen finnes automatisk, og lyden kan spilles over hele klaviaturet"),
+                r.withTrimmedTop (50.0f).toNearestInt(), juce::Justification::centred);
+}
+
 void HouseKeysEditor::paint (juce::Graphics& g)
 {
     const auto w = (float) getWidth(), h = (float) getHeight();
@@ -694,7 +753,14 @@ void HouseKeysEditor::paint (juce::Graphics& g)
 
     g.setFont (uiFont (11.5f));
     g.setColour (col::faint);
-    g.drawText (status, footer, juce::Justification::centredLeft);
+    juce::String left = status;
+    if (dropMessageTicks > 0) { left = dropMessage; g.setColour (col::accent); }
+    else if (soundDef (proc.getCurrentProgram()).sampler.user)
+        left = proc.getUserSampleName().isNotEmpty()
+                 ? utf8 ("Ditt sample: ") + proc.getUserSampleName() + utf8 ("  \xc2\xb7  grunntone ") + UserSample::noteName (proc.getUserSampleRoot())
+                 : utf8 ("Dra en lydfil (wav, aiff, flac, mp3) inn i pluginen for \xc3\xa5 lage din egen lyd");
+    g.drawText (left, footer, juce::Justification::centredLeft);
+    g.setColour (col::faint);
     g.drawText (utf8 ("Piano: Salamander Grand Piano av Alexander Holm (CC-BY 3.0)"), footer, juce::Justification::centredRight);
 }
 

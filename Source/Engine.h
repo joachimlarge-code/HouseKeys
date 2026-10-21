@@ -45,13 +45,15 @@ public:
     // The bank must stay alive while the engine uses it (the loader keeps it for the app's lifetime).
     void setSampleBank (const SampleBank* b) { bank = (b != nullptr && ! b->empty()) ? b : nullptr; }
     bool hasSamples() const { return bank != nullptr; }
+    void setUserBank (const SampleBank* b) { userBank = (b != nullptr && ! b->empty()) ? b : nullptr; }
 
     //--------------------------------------------------------------------------
     void noteOn (int note, float velocity)
     {
         noteOffInternal (note, true);
         const SoundDef& d = cur();
-        if (d.mono && p.chord == kChordOff)
+        const bool vaOnly = d.organ.level <= 0.0f && d.fm.level <= 0.0f && d.keys.level <= 0.0f && d.sampler.level <= 0.0f;
+        if (d.mono && p.chord == kChordOff && vaOnly)
         {
             // mono legato: keep the oscillators running and only retrigger the envelopes -> no clicks
             Voice* held = nullptr;
@@ -78,6 +80,8 @@ public:
     }
 
     void noteOff (int note) { noteOffInternal (note, false); }
+
+    void setModWheel (float v) { modWheel = clamp01 (v); }   // CC1 adds vibrato
 
     void setSustainPedal (bool down)
     {
@@ -134,6 +138,7 @@ private:
         float octGain = 0;
         double posO = 0, incO = 1;
         float glide = 1.0f, glideC = 0.0f;         // pitch ratio gliding toward 1 (mono legato)
+        float vibPh = 0.0f, age = 0.0f;            // vibrato phase, seconds since note start
         double pos = 0, inc = 1;
         bool undamped = false;
 
@@ -223,23 +228,24 @@ private:
         const float kt = std::clamp (std::pow (2.0f, -(pitch - 60) / 18.0f), 0.12f, 3.0f);
 
         //---- sampler (or modelled fallback while samples load)
-        if (d.sampler.level > 0.0f && bank != nullptr)
+        const SampleBank* sb = d.sampler.user ? userBank : bank;
+        if (d.sampler.level > 0.0f && sb != nullptr)
         {
-            const int ri = bank->rootIndexFor (pitch);
+            const int ri = sb->rootIndexFor (pitch);
             const float x = std::pow (vel, d.sampler.velCurve);
-            const int layer = std::clamp ((int) (x * (float) bank->numLayers), 0, bank->numLayers - 1);
-            v.za = bank->zone (ri, layer);
+            const int layer = std::clamp ((int) (x * (float) sb->numLayers), 0, sb->numLayers - 1);
+            v.za = sb->zone (ri, layer);
             if (v.za != nullptr)
             {
                 v.inc = std::pow (2.0, (pitch - v.za->root) / 12.0) * v.za->sampleRate / sr;
                 // layers are level-matched, so loudness follows velocity smoothly over the whole range
                 v.smpGain = d.sampler.level * v.za->gain * dbToGain (d.sampler.dynamics * (std::sqrt (vel) - 1.0f));
             }
-            v.undamped = pitch >= 89;   // the top strings of a grand have no dampers
+            v.undamped = pitch >= 89 && ! d.sampler.user;   // the top strings of a grand have no dampers
             if (d.sampler.octave > 0.0f && pitch + 12 <= 108)
             {
-                const int ro = bank->rootIndexFor (pitch + 12);
-                v.zo = bank->zone (ro, std::max (0, layer - 1));
+                const int ro = sb->rootIndexFor (pitch + 12);
+                v.zo = sb->zone (ro, std::max (0, layer - 1));
                 if (v.zo != nullptr)
                 {
                     v.incO = std::pow (2.0, (pitch + 12 - v.zo->root) / 12.0) * v.zo->sampleRate / sr;
@@ -247,7 +253,7 @@ private:
                 }
             }
         }
-        const bool useFallback = d.sampler.level > 0.0f && bank == nullptr && d.fallback.level > 0.0f;
+        const bool useFallback = d.sampler.level > 0.0f && ! d.sampler.user && bank == nullptr && d.fallback.level > 0.0f;
         const AcousticDef* ac = useFallback ? &d.fallback : nullptr;
 
         if (ac != nullptr)
@@ -402,7 +408,7 @@ private:
         v.released = true;
         const SoundDef& d = sounds()[(size_t) v.sound];
         // damper noise
-        if (bank != nullptr && v.za != nullptr && d.sampler.relNoise > 0.0f)
+        if (bank != nullptr && v.za != nullptr && d.sampler.relNoise > 0.0f && ! d.sampler.user)
             if (const SampleZone* z = bank->release (v.note))
                 for (auto& r : relVoices)
                     if (r.z == nullptr)
@@ -448,6 +454,20 @@ private:
         float* sd  = side.data();
         bool alive = false;
 
+        // vibrato: pitch ratio at the start and end of this chunk, interpolated per sample
+        const float knobDepth = p.vibOn ? p.vibDepth * std::min (1.0f, v.age / 0.25f) : 0.0f;   // fades in
+        const float depth = std::max (knobDepth, modWheel) * 60.0f / 1200.0f;                  // octaves
+        float vib0 = 1.0f, vibStep = 0.0f;
+        if (depth > 0.0f)
+        {
+            const float ph1 = v.vibPh + p.vibRate * (float) n / fs;
+            vib0 = std::exp2 (depth * std::sin (kTwoPi * v.vibPh));
+            const float vib1 = std::exp2 (depth * std::sin (kTwoPi * ph1));
+            vibStep = (vib1 - vib0) / (float) n;
+            v.vibPh = ph1 - std::floor (ph1);
+        }
+        v.age += (float) n / fs;
+
         //---- sampler (stereo)
         if (v.za != nullptr)
         {
@@ -466,7 +486,7 @@ private:
                 l *= ex; r *= ex; ex *= v.extraDecay;
                 out[i] += 0.5f * (l + r);
                 sd[i]  += 0.5f * (l - r);
-                pos += v.inc;
+                pos += v.inc * (vib0 + vibStep * (float) i);
             }
             v.pos = pos;
             if (v.zo != nullptr)
@@ -486,7 +506,7 @@ private:
                     out[i] += 0.5f * (l + r);
                     sd[i]  += 0.5f * (l - r);
                     exo *= v.extraDecay;
-                    po += v.incO;
+                    po += v.incO * (vib0 + vibStep * (float) i);
                 }
                 v.posO = po;
             }
@@ -613,7 +633,8 @@ private:
                 v.fbState = modA;
                 const float a = std::sin (kTwoPi * (float) v.ph[0] + iA * modA);
                 const float b = std::sin (kTwoPi * (float) v.ph[2] + iB * std::sin (kTwoPi * (float) v.ph[3]));
-                for (int j = 0; j < 4; ++j) { v.ph[j] += inc[j]; v.ph[j] -= std::floor (v.ph[j]); }
+                const double vf = vib0 + vibStep * (float) i;
+                for (int j = 0; j < 4; ++j) { v.ph[j] += inc[j] * vf; v.ph[j] -= std::floor (v.ph[j]); }
                 float s = a * (1.0f - 0.5f * m.mixB) + b * m.mixB;
                 if (m.bark > 0.0f)
                 {
@@ -660,7 +681,8 @@ private:
                     for (auto& ch : v.vf) for (auto& st : ch) st.set (fc, q, fs);
                 }
                 v.glide = 1.0f + (v.glide - 1.0f) * v.glideC;
-                const float drift = (1.0f + v.driftAmt * 0.000578f * std::sin (kTwoPi * v.driftPh)) * v.glide;
+                const float drift = (1.0f + v.driftAmt * 0.000578f * std::sin (kTwoPi * v.driftPh)) * v.glide
+                                  * (vib0 + vibStep * (float) i);
                 float l = 0.0f, r = 0.0f;
                 for (int u = 0; u < v.uni; ++u)
                 {
@@ -920,11 +942,13 @@ private:
     int block = 512;
     Params p;
     const SampleBank* bank = nullptr;
+    const SampleBank* userBank = nullptr;
     std::array<Voice, kMaxVoices> voices {};
     std::array<RelVoice, kRelVoices> relVoices {};
     std::vector<float> mono, side;
     uint64_t counter = 0;
     bool pedal = false, needsSnap = true;
+    float modWheel = 0.0f;
 
     FdnReverb reverb;
     AirProcessor air;

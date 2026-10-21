@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "SampleLoader.h"
+#include "PresetAI.h"
 
 using namespace hkui;
 
@@ -425,10 +426,205 @@ void SoundBrowser::paint (juce::Graphics& g)
 }
 
 //==============================================================================
+AiPanel::AiPanel (HouseKeysProcessor& p) : proc (p)
+{
+    for (auto* t : { &input, &keyInput })
+    {
+        t->setFont (uiFont (t == &input ? 18.0f : 13.0f));
+        t->setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff1b1724));
+        t->setColour (juce::TextEditor::outlineColourId, col::border.brighter (0.3f));
+        t->setColour (juce::TextEditor::focusedOutlineColourId, col::accent);
+        t->setColour (juce::TextEditor::textColourId, col::text);
+        t->setIndents (14, t == &input ? 13 : 7);
+        addAndMakeVisible (*t);
+    }
+    input.setTextToShowWhenEmpty (utf8 ("Beskriv lyden du vil ha, f.eks. \u00abfet house piano med mye luft og pump\u00bb"), col::faint);
+    input.onReturnKey = [this] { run (input.getText()); };
+    keyInput.setPasswordCharacter ((juce::juce_wchar) 0x2022);
+    keyInput.setTextToShowWhenEmpty (utf8 ("Valgfritt: Anthropic API-n\u00f8kkel for Claude"), col::faint);
+    keyInput.setText (PresetAI::loadApiKey(), false);
+
+    makeButton.setButtonText (utf8 ("LAG LYD"));
+    saveKey.setButtonText ("Lagre");
+    for (auto* b : { &makeButton, &saveKey })
+    {
+        b->setColour (juce::TextButton::buttonColourId, b == &makeButton ? col::accent : col::panel2);
+        b->setColour (juce::TextButton::textColourOffId, b == &makeButton ? col::bg : col::text);
+        b->setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        addAndMakeVisible (*b);
+    }
+    makeButton.onClick = [this] { run (input.getText()); };
+    saveKey.onClick = [this]
+    {
+        PresetAI::saveApiKey (keyInput.getText());
+        notes.clear();
+        resultTitle = keyInput.getText().trim().isEmpty() ? utf8 ("N\u00f8kkel fjernet \u2013 bruker innebygd AI")
+                                                          : utf8 ("N\u00f8kkel lagret \u2013 bruker Claude");
+        repaint();
+    };
+}
+
+void AiPanel::open()
+{
+    setVisible (true);
+    toFront (true);
+    input.grabKeyboardFocus();
+    repaint();
+}
+
+void AiPanel::run (const juce::String& text)
+{
+    if (busy || text.trim().isEmpty()) return;
+    lastPrompt = text.trim();
+    const auto key = keyInput.getText().trim();
+    usingClaude = key.isNotEmpty();
+    auto apply = [this] (const PresetAI::Result& r)
+    {
+        busy = false;
+        makeButton.setEnabled (true);
+        notes = r.notes;
+        if (r.ok)
+        {
+            proc.applyGenerated (r.sound, r.params);
+            resultTitle = utf8 ("\u2713  ") + utf8 (hk::sounds()[(size_t) r.sound].name)
+                        + (r.fromClaude ? utf8 ("   (laget av Claude)") : utf8 ("   (innebygd AI)"));
+        }
+        else
+            resultTitle = r.error;
+        repaint();
+    };
+    if (usingClaude)
+    {
+        busy = true;
+        makeButton.setEnabled (false);
+        resultTitle = utf8 ("Claude tenker \u2026");
+        notes.clear();
+        repaint();
+        juce::Component::SafePointer<AiPanel> safe (this);
+        PresetAI::askClaude (lastPrompt, key, proc.getCurrentProgram(), [safe, apply] (PresetAI::Result r) { if (safe != nullptr) apply (r); });
+    }
+    else
+        apply (PresetAI::interpretLocal (lastPrompt, proc.getCurrentProgram()));
+}
+
+void AiPanel::resized()
+{
+    auto r = getLocalBounds().reduced (26, 0);
+    closeArea = { getWidth() - 50, 14, 30, 30 };
+    auto row = r.withTrimmedTop (64).withHeight (52);
+    makeButton.setBounds (row.removeFromRight (150));
+    row.removeFromRight (12);
+    input.setBounds (row);
+
+    // example chips
+    chips.clear();
+    int x = r.getX(), y = 134;
+    for (auto& ex : PresetAI::examples())
+    {
+        const int w = juce::GlyphArrangement::getStringWidthInt (uiFont (13.5f), ex) + 30;
+        if (x + w > r.getRight()) { x = r.getX(); y += 40; }
+        chips.push_back ({ { x, y, w, 30 }, ex });
+        x += w + 10;
+    }
+
+    auto bottom = r.withTrimmedTop (getHeight() - 60).withHeight (34);
+    saveKey.setBounds (bottom.removeFromRight (90));
+    bottom.removeFromRight (10);
+    keyInput.setBounds (bottom.removeFromRight (420));
+}
+
+void AiPanel::mouseMove (const juce::MouseEvent& e)
+{
+    int h = -1;
+    for (size_t i = 0; i < chips.size(); ++i) if (chips[i].first.contains (e.getPosition())) h = (int) i;
+    if (closeArea.contains (e.getPosition())) h = 1000;
+    if (h != hoverChip) { hoverChip = h; repaint(); }
+    setMouseCursor (h >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void AiPanel::mouseUp (const juce::MouseEvent& e)
+{
+    if (closeArea.contains (e.getPosition())) { setVisible (false); if (onClose) onClose(); return; }
+    for (auto& c : chips)
+        if (c.first.contains (e.getPosition())) { input.setText (c.second, false); run (c.second); return; }
+}
+
+void AiPanel::paint (juce::Graphics& g)
+{
+    auto all = getLocalBounds().toFloat();
+    g.setColour (juce::Colour (0xff0d0a13));
+    g.fillRoundedRectangle (all, 16.0f);
+    juce::ColourGradient glow (col::violet.withAlpha (0.22f), 0, 0, col::violet.withAlpha (0.0f), all.getWidth() * 0.6f, all.getHeight(), true);
+    g.setGradientFill (glow);
+    g.fillRoundedRectangle (all, 16.0f);
+    g.setColour (col::border.brighter (0.2f));
+    g.drawRoundedRectangle (all.reduced (0.5f), 16.0f, 1.0f);
+
+    // title with sparkle
+    juce::ColourGradient tg (col::accent, 26.0f, 0.0f, col::violet, 360.0f, 0.0f, false);
+    tg.addColour (0.5, col::hot);
+    g.setGradientFill (tg);
+    g.setFont (uiFont (22.0f, true));
+    g.drawText (utf8 ("\u2726 AI  \u00b7  LAG LYDEN DU VIL HA"), 26, 16, 600, 32, juce::Justification::centredLeft);
+
+    g.setColour (hoverChip == 1000 ? col::text : col::dim);
+    const auto c = closeArea.toFloat().reduced (9.0f);
+    g.drawLine (c.getX(), c.getY(), c.getRight(), c.getBottom(), 2.2f);
+    g.drawLine (c.getRight(), c.getY(), c.getX(), c.getBottom(), 2.2f);
+
+    g.setFont (uiFont (13.5f));
+    for (size_t i = 0; i < chips.size(); ++i)
+    {
+        auto r = chips[i].first.toFloat();
+        const bool hov = (int) i == hoverChip;
+        g.setColour (hov ? col::accent.withAlpha (0.25f) : col::panel2);
+        g.fillRoundedRectangle (r, 15.0f);
+        g.setColour (hov ? col::accent : col::border.brighter (0.3f));
+        g.drawRoundedRectangle (r.reduced (0.5f), 15.0f, 1.0f);
+        g.setColour (hov ? col::text : col::dim);
+        g.drawText (chips[i].second, r.toNearestInt(), juce::Justification::centred);
+    }
+
+    // result
+    const int ry = (chips.empty() ? 134 : chips.back().first.getBottom()) + 30;
+    if (resultTitle.isNotEmpty())
+    {
+        g.setColour (col::text);
+        g.setFont (uiFont (20.0f, true));
+        g.drawText (resultTitle, 26, ry, getWidth() - 52, 30, juce::Justification::centredLeft);
+        g.setFont (uiFont (14.5f));
+        int y = ry + 38;
+        for (auto& n : notes)
+        {
+            g.setColour (col::accent);
+            g.fillEllipse (30.0f, (float) y + 8.0f, 6.0f, 6.0f);
+            g.setColour (col::dim.brighter (0.4f));
+            g.drawText (n, 46, y, getWidth() - 80, 22, juce::Justification::centredLeft);
+            y += 26;
+        }
+    }
+    else
+    {
+        g.setColour (col::faint);
+        g.setFont (uiFont (14.5f));
+        g.drawMultiLineText (utf8 ("Skriv p\u00e5 norsk eller engelsk hva du vil ha \u2013 type lyd (piano, rhodes, pad, bass, lead, pluck, supersaw \u2026)\n"
+                                   "og hvordan den skal l\u00e5te (fet, m\u00f8rk, lys, luftig, bred, kort, lo-fi, med reverb, delay, pump, vibrato \u2026).\n"
+                                   "AI-en velger beste lyd og stiller inn alle knappene. Du kan justere videre etterp\u00e5."),
+                             26, ry + 20, getWidth() - 52);
+    }
+
+    g.setColour (col::faint);
+    g.setFont (uiFont (12.0f));
+    g.drawText (keyInput.getText().trim().isEmpty() ? utf8 ("Bruker innebygd AI (gratis, uten internett)")
+                                                    : utf8 ("Bruker Claude (din API-n\u00f8kkel)"),
+                26, getHeight() - 60, 400, 34, juce::Justification::centredLeft);
+}
+
+//==============================================================================
 SoundSelector::SoundSelector (HouseKeysProcessor& p) : proc (p)
 {
     name.paramID = "sound";
-    for (juce::Component* c : { (juce::Component*) &prev, (juce::Component*) &next, (juce::Component*) &name, (juce::Component*) &browse })
+    for (juce::Component* c : { (juce::Component*) &prev, (juce::Component*) &next, (juce::Component*) &name, (juce::Component*) &browse, (juce::Component*) &ai })
     {
         addAndMakeVisible (c);
         c->setMouseCursor (juce::MouseCursor::PointingHandCursor);
@@ -437,6 +633,7 @@ SoundSelector::SoundSelector (HouseKeysProcessor& p) : proc (p)
     next.onClick = [this] { proc.selectSound (proc.getCurrentProgram() + 1); refresh(); };
     name.onClick   = [this] { if (onBrowse) onBrowse(); };
     browse.onClick = [this] { if (onBrowse) onBrowse(); };
+    ai.onClick = [this] { if (onAi) onAi(); };
     refresh();
 }
 
@@ -451,6 +648,8 @@ void SoundSelector::resized()
 {
     auto r = getLocalBounds();
     browse.setBounds (r.removeFromRight (104));
+    r.removeFromRight (8);
+    ai.setBounds (r.removeFromRight (72));
     r.removeFromRight (10);
     prev.setBounds (r.removeFromLeft (48));
     next.setBounds (r.removeFromRight (48));
@@ -517,6 +716,19 @@ void SoundSelector::BrowseButton::paintButton (juce::Graphics& g, bool highlight
     g.drawText ("LYDER", r.withTrimmedLeft (38.0f), juce::Justification::centredLeft);
 }
 
+void SoundSelector::AiButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    juce::ColourGradient cg (col::violet, r.getX(), r.getY(), col::hot, r.getRight(), r.getBottom(), false);
+    g.setGradientFill (cg);
+    g.setOpacity (down ? 0.8f : 1.0f);
+    g.fillRoundedRectangle (r, 12.0f);
+    if (highlighted) { g.setColour (juce::Colours::white.withAlpha (0.14f)); g.fillRoundedRectangle (r, 12.0f); }
+    g.setColour (juce::Colours::white);
+    g.setFont (uiFont (15.0f, true));
+    g.drawText (utf8 ("\u2726 AI"), r, juce::Justification::centred);
+}
+
 //==============================================================================
 FxCard::FxCard (juce::AudioProcessorValueTreeState& s, const juce::String& t, const juce::String& onId) : title (t)
 {
@@ -561,13 +773,14 @@ void FxCard::resized()
 
 //==============================================================================
 HouseKeysEditor::HouseKeysEditor (HouseKeysProcessor& p)
-    : AudioProcessorEditor (p), proc (p), selector (p), browser (p)
+    : AudioProcessorEditor (p), proc (p), selector (p), browser (p), aiPanel (p)
 {
     setLookAndFeel (&look);
     auto& s = proc.apvts;
 
     addAndMakeVisible (selector);
-    selector.onBrowse = [this] { if (browser.isVisible()) browser.setVisible (false); else browser.open(); };
+    selector.onBrowse = [this] { aiPanel.setVisible (false); if (browser.isVisible()) browser.setVisible (false); else browser.open(); };
+    selector.onAi     = [this] { browser.setVisible (false); if (aiPanel.isVisible()) aiPanel.setVisible (false); else aiPanel.open(); };
 
     for (auto [id, title] : { std::pair { "tone", "Tone" }, std::pair { "air", "Air" }, std::pair { "attack", "Attack" },
                               std::pair { "decay", "Decay" }, std::pair { "release", "Release" },
@@ -616,6 +829,7 @@ HouseKeysEditor::HouseKeysEditor (HouseKeysProcessor& p)
     }
 
     addChildComponent (browser);   // hidden until opened
+    addChildComponent (aiPanel);
     for (auto& k : mainKnobs) k->slider.sendLookAndFeelChange();
 
     setSize (kW, kH);
@@ -814,4 +1028,5 @@ void HouseKeysEditor::resized()
     }
 
     browser.setBounds (margin, 86, getWidth() - margin * 2, footer.getY() - 6 - 86);
+    aiPanel.setBounds (browser.getBounds());
 }

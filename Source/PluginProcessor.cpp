@@ -160,6 +160,12 @@ void HouseKeysProcessor::applySoundPreset (int index)
     for (auto* id : kResetIds) setParam (id, presetValue (q, id));
 }
 
+void HouseKeysProcessor::applyGenerated (int sound, const std::map<juce::String, float>& params)
+{
+    if (juce::isPositiveAndBelow (sound, (int) hk::kNumSounds)) selectSound (sound);
+    for (auto& [id, value] : params) setParam (id, value);
+}
+
 void HouseKeysProcessor::selectSound (int index)
 {
     index = (index % hk::kNumSounds + hk::kNumSounds) % hk::kNumSounds;   // arrows wrap around

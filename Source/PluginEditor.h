@@ -112,14 +112,40 @@ private:
     juce::Rectangle<int> catArea, tileArea, closeArea;
 };
 
-// Top bar: [<]  [ CATEGORY  name  tag ]  [>]  [BROWSE]
+// AI panel: describe a sound, get a preset
+class AiPanel : public juce::Component
+{
+public:
+    explicit AiPanel (HouseKeysProcessor&);
+    void open();
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    std::function<void()> onClose;
+
+private:
+    void run (const juce::String& text);
+
+    HouseKeysProcessor& proc;
+    juce::TextEditor input, keyInput;
+    juce::TextButton makeButton, saveKey;
+    juce::StringArray notes;
+    juce::String resultTitle, lastPrompt;
+    bool busy = false, usingClaude = false;
+    std::vector<std::pair<juce::Rectangle<int>, juce::String>> chips;
+    juce::Rectangle<int> closeArea;
+    int hoverChip = -1;
+};
+
+// Top bar: [<]  [ CATEGORY  name ]  [>]  [AI]  [LYDER]
 class SoundSelector : public juce::Component
 {
 public:
     explicit SoundSelector (HouseKeysProcessor&);
     void resized() override;
     void refresh();
-    std::function<void()> onBrowse;
+    std::function<void()> onBrowse, onAi;
 
 private:
     struct Arrow : public juce::Button
@@ -140,11 +166,17 @@ private:
         BrowseButton() : juce::Button ("browse") {}
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
     };
+    struct AiButton : public juce::Button
+    {
+        AiButton() : juce::Button ("ai") {}
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    };
 
     HouseKeysProcessor& proc;
     Arrow prev { true }, next { false };
     HostMenu<NameBox> name;
     BrowseButton browse;
+    AiButton ai;
 };
 
 // Effect section card with an on/off switch
@@ -194,6 +226,7 @@ private:
 
     hkui::SoundSelector selector;
     hkui::SoundBrowser browser;
+    hkui::AiPanel aiPanel;
     std::vector<std::unique_ptr<hkui::Knob>> mainKnobs;
     hkui::Knob* airKnob = nullptr;
     std::unique_ptr<hkui::Choice> chord;

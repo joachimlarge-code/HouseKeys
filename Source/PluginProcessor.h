@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Engine.h"
+#include <map>
 
 class HouseKeysProcessor : public juce::AudioProcessor,
                            private juce::AudioProcessorValueTreeState::Listener,
@@ -43,6 +44,9 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
     std::atomic<float> meterL { 0.0f }, meterR { 0.0f };   // output peak for the UI meter
+
+    // AI: apply a generated preset (base sound + control values). Message thread only.
+    void applyGenerated (int sound, const std::map<juce::String, float>& params);
 
     // Drag & drop: load any audio file as the "Ditt sample" sound. Message thread only.
     bool loadUserSample (const juce::File& file, juce::String& message);

@@ -7,6 +7,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "Engine.h"
 #include "SampleLoader.h"
+#include "PresetAI.h"
 #include <chrono>
 
 namespace
@@ -148,6 +149,20 @@ void writeWav (const juce::File& f, const std::vector<float>& L, const std::vect
 
 int main (int argc, char** argv)
 {
+    if (std::getenv ("HK_AI_TEST") != nullptr)   // print what the built-in AI makes of each line on stdin
+    {
+        char line[512];
+        while (std::fgets (line, sizeof line, stdin))
+        {
+            const auto text = juce::String::fromUTF8 (line).trim();
+            if (text.isEmpty()) continue;
+            const auto r = PresetAI::interpretLocal (text, hk::kDefaultSound);
+            juce::String ps;
+            for (auto& [k, v] : r.params) ps << k << "=" << juce::String (v, 2) << " ";
+            std::printf ("%-45s -> %-20s | %s\n", text.toRawUTF8(), r.sound >= 0 ? hk::sounds()[(size_t) r.sound].name : "-", ps.toRawUTF8());
+        }
+        return 0;
+    }
     if (argc < 2) { std::printf ("usage: hk_render out.wav [sound] [gate notes...]\n"); return 1; }
     const juce::File out = juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]);
     const int only = argc > 2 ? std::atoi (argv[2]) : -1;

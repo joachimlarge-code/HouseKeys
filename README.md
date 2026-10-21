@@ -1,4 +1,4 @@
-# HouseKeys 3.3
+# HouseKeys 3.4
 
 Et house keys-instrument for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel).
 Ekte samplet flygel, friske house-pianoer, Rhodes, pads, bass, plucks og synth-akkorder,
@@ -71,6 +71,19 @@ Alle lydene er nivåkalibrert (ca. −13,5 LUFS, pianoer og leads −14,5, bass 
 **Automation:** høyreklikk på en knapp. Da merkes den som «sist vridd» i FL Studio, og menyen viser veien:
 **Tools → Last tweaked → Create automation clip** (eller **Add → Automation from last tweaked parameter**).
 FL Studio lar ikke plugins lage clipet selv, så dette er den raskeste veien.
+
+## ✦ AI: lag lyden du vil ha
+
+Trykk **✦ AI** øverst og skriv hva du vil ha, på norsk eller engelsk, f.eks.
+*«fet house piano med mye luft og pump»*, *«mørk lo-fi rhodes med delay»* eller *«tung reese bass»*.
+AI-en velger beste grunnlyd og stiller inn alle knapper og effekter. Du kan justere videre etterpå.
+
+- **Innebygd AI** (standard): gratis, virker uten internett, svarer med en gang. Forstår lydtyper
+  (piano, rhodes, pad, bass, lead, pluck, supersaw …), karakter (fet, mørk, lys, luftig, bred, kort, lang,
+  lo-fi, myk …), effekter (reverb, delay, chorus, pump, vibrato, filter, «uten reverb») og styrke («litt», «mye»).
+- **Claude** (valgfritt): lim inn din egen Anthropic API-nøkkel nederst i AI-panelet for friere beskrivelser.
+  Nøkkelen lagres bare på din Mac (`~/Library/Application Support/HouseKeys/settings.xml`), ikke i prosjekter.
+  Bruk koster litt per forespørsel på din Anthropic-konto. Hvis Claude ikke svarer, brukes den innebygde AI-en.
 
 ## Ditt sample (dra og slipp)
 

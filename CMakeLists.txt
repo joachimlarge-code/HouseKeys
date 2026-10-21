@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Mac architectures")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(HouseKeys VERSION 3.3.0 LANGUAGES C CXX)
+project(HouseKeys VERSION 3.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,7 +52,8 @@ juce_add_plugin(HouseKeys
 target_sources(HouseKeys PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/SampleLoader.cpp)
+    Source/SampleLoader.cpp
+    Source/PresetAI.cpp)
 
 target_compile_definitions(HouseKeys PUBLIC
     HK_HAS_SAMPLES=${HK_HAS_SAMPLES}
@@ -75,11 +76,11 @@ target_link_libraries(HouseKeys
 option(HK_BUILD_TOOLS "Build the offline render tool" OFF)
 if(HK_BUILD_TOOLS)
     juce_add_console_app(hk_render PRODUCT_NAME "hk_render")
-    target_sources(hk_render PRIVATE tools/hk_render.cpp Source/SampleLoader.cpp)
+    target_sources(hk_render PRIVATE tools/hk_render.cpp Source/SampleLoader.cpp Source/PresetAI.cpp)
     target_compile_definitions(hk_render PRIVATE HK_HAS_SAMPLES=${HK_HAS_SAMPLES} JUCE_USE_OGGVORBIS=1
                                JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
     target_include_directories(hk_render PRIVATE Source)
-    target_link_libraries(hk_render PRIVATE juce::juce_audio_formats
+    target_link_libraries(hk_render PRIVATE juce::juce_audio_formats juce::juce_events
                           $<$<BOOL:${HK_HAS_SAMPLES}>:HouseKeysSamples>
                           juce::juce_recommended_config_flags)
 endif()

@@ -105,6 +105,13 @@ private:
     const hk::SoundDef* activeDef = nullptr;
     int customKind = hk::kCatHousePiano;
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
+    struct AiWorker : public juce::Thread   // own thread with a big stack (the AI renders audio to level-match)
+    {
+        explicit AiWorker (std::function<void()> f) : juce::Thread ("HouseKeys AI", 8 * 1024 * 1024), fn (std::move (f)) {}
+        void run() override { fn(); }
+        std::function<void()> fn;
+    };
+    std::unique_ptr<AiWorker> aiWorker;
     std::atomic<int> previewRequest { -1 };
     int pvPos = -1, pvKind = 0;   // audio thread
     bool pvMono = false;

@@ -18,6 +18,7 @@ public:
     static constexpr int kBeatPartials = 8;
     static constexpr int kMaxUnison    = 7;
     static constexpr int kRelVoices    = 16;
+    static constexpr int kKsLen        = 4096;   // plucked-string delay line per voice
 
     void prepare (double sampleRate, int maxBlock)
     {
@@ -26,8 +27,10 @@ public:
         block = std::max (32, std::min (maxBlock, 1024));
         mono.assign ((size_t) block, 0.0f);
         side.assign ((size_t) block, 0.0f);
-        voices = {};
-        relVoices = {};
+        // reset in place: a temporary copy of all voices would be far too big for a small thread stack
+        for (auto& v : voices) v = Voice {};
+        for (auto& r : relVoices) r = RelVoice {};
+        ksPool.assign ((size_t) kMaxVoices * kKsLen, 0.0f);
         reverb.prepare (sr);
         air.prepare (fs);
         chorusLine.init ((int) (0.05 * sr));
@@ -184,7 +187,7 @@ private:
         bool strOn = false;
         int ksW = 0, ksLife = 0;
         float ksDelay = 0, ksG = 0, ksAmp = 0, ksPrev = 0, ksB = 0.5f;
-        std::array<float, 4096> ks {};
+        float* ks = nullptr;                       // kKsLen samples in Engine::ksPool
     };
 
     struct RelVoice { const SampleZone* z = nullptr; double pos = 0, inc = 1; float gain = 0; };
@@ -235,6 +238,7 @@ private:
     {
         const SoundDef& d = cur();
         v = Voice {};
+        v.ks = ksPool.empty() ? nullptr : ksPool.data() + (size_t) (&v - voices.data()) * kKsLen;
         v.active = true; v.note = pitch; v.trigger = trigger; v.sound = p.sound;
         v.order = ++counter; v.vel = vel; v.gain = gain;
         v.rng.s = 0x9E3779B9u ^ (uint32_t) (counter * 2654435761u);
@@ -410,7 +414,7 @@ private:
         {
             const StrDef& st = d.str;
             const float period = fs / f;
-            if (period > 2.0f && period < 4000.0f)
+            if (v.ks != nullptr && period > 2.0f && period < (float) kKsLen - 8.0f)
             {
                 v.strOn = true;
                 v.ksB = 0.15f + 0.85f * clamp01 (st.damp + 0.25f * toneOffset());
@@ -424,7 +428,7 @@ private:
                 for (int i = 0; i < len; ++i) { lp += pc * (v.rng.next() - lp); v.ks[(size_t) i] = lp; mean += lp; }
                 mean /= (float) len;
                 for (int i = 0; i < len; ++i) v.ks[(size_t) i] -= mean;   // no DC thump
-                v.ksW = len % (int) v.ks.size();
+                v.ksW = len % kKsLen;
                 v.ksPrev = 0.0f;
             }
         }
@@ -828,7 +832,7 @@ private:
         //---- plucked string
         if (v.strOn)
         {
-            const int N = (int) v.ks.size();
+            const int N = kKsLen;
             const float dl = v.ksDelay;
             const int di = (int) dl;
             const float fr = dl - (float) di;
@@ -1088,6 +1092,7 @@ private:
     std::vector<float> mono, side;
     uint64_t counter = 0;
     double curBpm = 120.0;
+    std::vector<float> ksPool;
     bool pedal = false, needsSnap = true;
     float modWheel = 0.0f;
 

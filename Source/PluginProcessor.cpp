@@ -122,6 +122,7 @@ HouseKeysProcessor::HouseKeysProcessor()
 HouseKeysProcessor::~HouseKeysProcessor()
 {
     alive->store (false);   // an AI answer still on its way is dropped
+    if (aiWorker != nullptr) aiWorker->stopThread (10000);
     apvts.removeParameterListener ("sound", this);
     cancelPendingUpdate();
 }
@@ -293,7 +294,8 @@ void HouseKeysProcessor::sendChat (const juce::String& rawText)
 
     const auto seed = (juce::uint32) juce::Random::getSystemRandom().nextInt();
     auto flag = alive;
-    juce::Thread::launch ([this, flag, ctx, text, seed]
+    if (aiWorker != nullptr) aiWorker->stopThread (5000);   // the previous answer is already done (aiBusy guards)
+    aiWorker = std::make_unique<AiWorker> ([this, flag, ctx, text, seed]
     {
         const auto start = juce::Time::getMillisecondCounter();
         auto r = PresetAI::respond (text, ctx.get(), seed);
@@ -302,6 +304,7 @@ void HouseKeysProcessor::sendChat (const juce::String& rawText)
         if (took < 700) juce::Thread::sleep ((int) (700 - took));   // let the "typing" dots show
         juce::MessageManager::callAsync ([this, flag, r] { if (flag->load()) finishChat (r); });
     });
+    aiWorker->startThread();
 }
 
 void HouseKeysProcessor::finishChat (PresetAI::Result r)

@@ -148,7 +148,24 @@ void writeWav (const juce::File& f, const std::vector<float>& L, const std::vect
 }
 } // namespace
 
+#include <pthread.h>
+static int realMain (int argc, char** argv);
 int main (int argc, char** argv)
+{
+    if (const char* kb = std::getenv ("HK_STACK_KB"))   // run everything on a thread with a small stack (like macOS side threads)
+    {
+        struct A { int c; char** v; int ret; } a { argc, argv, 0 };
+        pthread_attr_t at; pthread_attr_init (&at);
+        pthread_attr_setstacksize (&at, (size_t) std::atoi (kb) * 1024);
+        pthread_t t;
+        pthread_create (&t, &at, [] (void* p) -> void* { auto* x = (A*) p; x->ret = realMain (x->c, x->v); return nullptr; }, &a);
+        pthread_join (t, nullptr);
+        return a.ret;
+    }
+    return realMain (argc, argv);
+}
+
+static int realMain (int argc, char** argv)
 {
     if (std::getenv ("HK_LEVEL_CHECK") != nullptr)   // does autoLevel agree with the factory calibration?
     {

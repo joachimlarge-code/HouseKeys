@@ -112,31 +112,73 @@ private:
     juce::Rectangle<int> catArea, tileArea, closeArea;
 };
 
-// AI panel: describe a sound, get a preset
-class AiPanel : public juce::Component
+// AI chat: the messages (inside a Viewport)
+class ChatList : public juce::Component
 {
 public:
-    explicit AiPanel (HouseKeysProcessor&);
+    explicit ChatList (HouseKeysProcessor&);
+    void rebuild (int width, int minHeight);
+    void paint (juce::Graphics&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    float phase = 0.0f;   // typing dots
+
+private:
+    struct Hit { juce::Rectangle<float> r; int msg = -1, action = 0; };   // 0 card, 1 play, 2 save, 3 variant
+    struct Item
+    {
+        int msg = -1;
+        bool user = false, typing = false;
+        juce::Rectangle<float> bubble, card, textArea;
+        juce::TextLayout text;
+        std::vector<std::pair<juce::Rectangle<float>, juce::String>> chips;
+        juce::Rectangle<float> play, save, variant;
+    };
+    HouseKeysProcessor& proc;
+    std::vector<Item> items;
+    std::vector<Hit> hits;
+    int hover = -1;
+};
+
+// AI chat panel: header, messages, suggestions and the message box
+class ChatPanel : public juce::Component, private juce::ChangeListener, private juce::Timer
+{
+public:
+    explicit ChatPanel (HouseKeysProcessor&);
+    ~ChatPanel() override;
     void open();
     void paint (juce::Graphics&) override;
     void resized() override;
-    void mouseUp (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void visibilityChanged() override;
     std::function<void()> onClose;
 
 private:
-    void run (const juce::String& text);
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
+    void timerCallback() override;
+    void send (const juce::String& text);
+    void refresh (bool scrollToEnd);
+    void layoutChips();
+
+    struct SendButton : public juce::Button
+    {
+        SendButton() : juce::Button ("send") {}
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    };
 
     HouseKeysProcessor& proc;
-    juce::TextEditor input, keyInput, nameInput;
-    juce::TextButton makeButton, saveKey, savePreset;
-    bool hasResult = false;
-    juce::StringArray notes;
-    juce::String resultTitle, lastPrompt;
-    bool busy = false, usingClaude = false;
+    juce::Viewport view;
+    ChatList list;
+    juce::TextEditor input;
+    SendButton sendButton;
     std::vector<std::pair<juce::Rectangle<int>, juce::String>> chips;
-    juce::Rectangle<int> closeArea;
-    int hoverChip = -1;
+    juce::Rectangle<int> closeArea, newArea, composer, chipRow;
+    int hover = -1;   // chip index, 1000 close, 1001 new chat
+    size_t lastCount = 0;
+    bool lastBusy = false, lastFocus = false;
 };
 
 // Top bar: [<]  [ CATEGORY  name ]  [>]  [AI]  [LYDER]
@@ -227,7 +269,7 @@ private:
 
     hkui::SoundSelector selector;
     hkui::SoundBrowser browser;
-    hkui::AiPanel aiPanel;
+    hkui::ChatPanel aiPanel;
     std::vector<std::unique_ptr<hkui::Knob>> mainKnobs;
     hkui::Knob* airKnob = nullptr;
     std::unique_ptr<hkui::Choice> chord;

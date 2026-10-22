@@ -458,227 +458,507 @@ void SoundBrowser::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-AiPanel::AiPanel (HouseKeysProcessor& p) : proc (p)
+// AI chat
+namespace
 {
-    for (auto* t : { &input, &keyInput })
+// "**bold**" support, wrapped by word
+juce::AttributedString richText (const juce::String& text, float size, juce::Colour c, juce::Colour boldColour)
+{
+    juce::AttributedString a;
+    a.setWordWrap (juce::AttributedString::byWord);
+    a.setLineSpacing (4.0f);
+    bool bold = false;
+    int i = 0;
+    for (;;)
     {
-        t->setFont (uiFont (t == &input ? 18.0f : 13.0f));
-        t->setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff1b1724));
-        t->setColour (juce::TextEditor::outlineColourId, col::border.brighter (0.3f));
-        t->setColour (juce::TextEditor::focusedOutlineColourId, col::accent);
-        t->setColour (juce::TextEditor::textColourId, col::text);
-        t->setIndents (14, t == &input ? 13 : 7);
-        addAndMakeVisible (*t);
+        const int j = text.indexOf (i, "**");
+        const auto seg = j < 0 ? text.substring (i) : text.substring (i, j);
+        if (seg.isNotEmpty()) a.append (seg, uiFont (size, bold), bold ? boldColour : c);
+        if (j < 0) break;
+        bold = ! bold;
+        i = j + 2;
     }
-    input.setTextToShowWhenEmpty (utf8 ("Beskriv lyden du vil ha, f.eks. \u00abfet house piano med mye luft og pump\u00bb"), col::faint);
-    input.onReturnKey = [this] { run (input.getText()); };
-    keyInput.setPasswordCharacter ((juce::juce_wchar) 0x2022);
-    keyInput.setTextToShowWhenEmpty (utf8 ("Valgfritt: Anthropic API-n\u00f8kkel for Claude"), col::faint);
-    keyInput.setText (PresetAI::loadApiKey(), false);
-
-    makeButton.setButtonText (utf8 ("LAG NY LYD"));
-    saveKey.setButtonText ("Lagre");
-    savePreset.setButtonText (utf8 ("Lagre som preset"));
-    nameInput.setFont (uiFont (15.0f, true));
-    nameInput.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff1b1724));
-    nameInput.setColour (juce::TextEditor::outlineColourId, col::border.brighter (0.3f));
-    nameInput.setColour (juce::TextEditor::focusedOutlineColourId, col::accent);
-    nameInput.setColour (juce::TextEditor::textColourId, col::text);
-    nameInput.setIndents (12, 9);
-    addChildComponent (nameInput);
-    addChildComponent (savePreset);
-    savePreset.onClick = [this]
-    {
-        juce::String msg;
-        proc.saveCustomPreset (nameInput.getText(), msg);
-        notes.clear();
-        notes.add (msg);
-        resultTitle = utf8 ("\u2713  ") + nameInput.getText().trim();
-        repaint();
-    };
-    for (auto* b : { &makeButton, &saveKey, &savePreset })
-    {
-        b->setColour (juce::TextButton::buttonColourId, b == &makeButton ? col::accent : (b == &savePreset ? col::violet : col::panel2));
-        b->setColour (juce::TextButton::textColourOffId, b == &makeButton ? col::bg : col::text);
-        b->setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        if (b == &savePreset) addChildComponent (*b); else addAndMakeVisible (*b);
-    }
-    makeButton.onClick = [this] { run (input.getText()); };
-    saveKey.onClick = [this]
-    {
-        PresetAI::saveApiKey (keyInput.getText());
-        notes.clear();
-        resultTitle = keyInput.getText().trim().isEmpty() ? utf8 ("N\u00f8kkel fjernet \u2013 bruker innebygd AI")
-                                                          : utf8 ("N\u00f8kkel lagret \u2013 bruker Claude");
-        repaint();
-    };
+    return a;
 }
 
-void AiPanel::open()
+float usedWidth (const juce::TextLayout& tl)
 {
-    setVisible (true);
-    toFront (true);
-    input.grabKeyboardFocus();
-    repaint();
+    float w = 0.0f;
+    for (int i = 0; i < tl.getNumLines(); ++i) w = juce::jmax (w, tl.getLine (i).getLineBoundsX().getEnd());
+    return w;
 }
 
-void AiPanel::run (const juce::String& text)
+void drawSparkle (juce::Graphics& g, juce::Rectangle<float> r)
 {
-    if (busy || text.trim().isEmpty()) return;
-    lastPrompt = text.trim();
-    const auto key = keyInput.getText().trim();
-    usingClaude = key.isNotEmpty();
-    auto apply = [this] (const PresetAI::Result& r)
+    juce::ColourGradient cg (col::violet, r.getX(), r.getY(), col::hot, r.getRight(), r.getBottom(), false);
+    cg.addColour (0.85, col::accent);
+    g.setGradientFill (cg);
+    g.fillEllipse (r);
+    // four-point star
+    const auto c = r.getCentre();
+    const float R = r.getWidth() * 0.30f, q = R * 0.28f;
+    juce::Path star;
+    star.startNewSubPath (c.x, c.y - R);
+    star.quadraticTo (c.x + q * 0.3f, c.y - q * 0.3f, c.x + R, c.y);
+    star.quadraticTo (c.x + q * 0.3f, c.y + q * 0.3f, c.x, c.y + R);
+    star.quadraticTo (c.x - q * 0.3f, c.y + q * 0.3f, c.x - R, c.y);
+    star.quadraticTo (c.x - q * 0.3f, c.y - q * 0.3f, c.x, c.y - R);
+    star.closeSubPath();
+    g.setColour (juce::Colours::white);
+    g.fillPath (star);
+}
+
+const char* kWelcome = "Hei! Jeg er **HouseKeys AI**. Beskriv lyden du vil ha, s\xc3\xa5 designer jeg en **helt ny preset** til deg "
+                       "\xe2\x80\x93 gratis og uten internett.\n"
+                       "Etterp\xc3\xa5 kan du skrive ting som \xc2\xab""fetere\xc2\xbb, \xc2\xabmer luft\xc2\xbb, \xc2\xabuten reverb\xc2\xbb eller \xc2\xabny variant\xc2\xbb.";
+} // namespace
+
+ChatList::ChatList (HouseKeysProcessor& p) : proc (p) {}
+
+void ChatList::rebuild (int width, int minHeight)
+{
+    items.clear();
+    hits.clear();
+    const auto& chat = proc.getChat();
+    const float W = (float) width;
+    const float aiX = 64.0f, side = 22.0f;
+    float y = 20.0f;
+
+    auto addAi = [&] (int msg, const juce::String& text)
     {
-        busy = false;
-        makeButton.setEnabled (true);
-        notes = r.notes;
-        if (r.ok)
+        Item it;
+        it.msg = msg;
+        const float maxW = juce::jmin (W - aiX - side, 640.0f);
+        it.text.createLayout (richText (text, 15.0f, col::text.withAlpha (0.86f), juce::Colours::white), maxW - 34.0f);
+        const float tw = usedWidth (it.text), th = it.text.getHeight();
+        it.bubble = { aiX, y, tw + 34.0f, th + 24.0f };
+        it.textArea = { aiX + 17.0f, y + 12.0f, maxW - 34.0f, th };
+        y = it.bubble.getBottom();
+
+        if (msg >= 0 && chat[(size_t) msg].hasSound)
         {
-            proc.applyCustomSound (r.def, r.name);
-            resultTitle = utf8 ("\u2726  Ny lyd: ") + r.name
-                        + (r.fromClaude ? utf8 ("   (laget av Claude)") : utf8 ("   (innebygd AI)"));
-            nameInput.setText (r.name, false);
-            hasResult = true;
-            nameInput.setVisible (true);
-            savePreset.setVisible (true);
-            resized();
+            const auto& m = chat[(size_t) msg];
+            const float cw = juce::jmin (580.0f, W - aiX - side), cx = aiX, cy = y + 10.0f;
+            float px = cx + 22.0f, py = cy + 74.0f;
+            const auto chipFont = uiFont (12.5f, true);
+            for (auto& c : m.chips)
+            {
+                const float w = (float) juce::GlyphArrangement::getStringWidthInt (chipFont, c) + 22.0f;
+                if (px + w > cx + cw - 18.0f) { px = cx + 22.0f; py += 30.0f; }
+                it.chips.push_back ({ { px, py, w, 24.0f }, c });
+                px += w + 6.0f;
+            }
+            const float by = (it.chips.empty() ? py : py + 24.0f) + 16.0f;
+            it.play    = { cx + 22.0f, by, 100.0f, 36.0f };
+            it.save    = { it.play.getRight() + 10.0f, by, 118.0f, 36.0f };
+            it.variant = { it.save.getRight() + 10.0f, by, 124.0f, 36.0f };
+            it.card = { cx, cy, cw, by + 36.0f + 18.0f - cy };
+            hits.push_back ({ it.play, msg, 1 });
+            hits.push_back ({ it.save, msg, 2 });
+            hits.push_back ({ it.variant, msg, 3 });
+            hits.push_back ({ it.card, msg, 0 });
+            y = it.card.getBottom();
         }
-        else
-            resultTitle = r.error;
-        repaint();
+        y += 18.0f;
+        items.push_back (std::move (it));
     };
-    if (usingClaude)
+
+    if (chat.empty()) addAi (-1, utf8 (kWelcome));
+    for (size_t i = 0; i < chat.size(); ++i)
     {
-        busy = true;
-        makeButton.setEnabled (false);
-        resultTitle = utf8 ("Claude designer lyden \u2026");
-        notes.clear();
-        repaint();
-        juce::Component::SafePointer<AiPanel> safe (this);
-        PresetAI::askClaude (lastPrompt, key, proc.getCurrentProgram(), [safe, apply] (PresetAI::Result r) { if (safe != nullptr) apply (r); });
+        const auto& m = chat[i];
+        if (! m.fromUser) { addAi ((int) i, m.text); continue; }
+        Item it;
+        it.msg = (int) i;
+        it.user = true;
+        const float maxW = juce::jmin (W * 0.6f, 500.0f);
+        it.text.createLayout (richText (m.text, 15.0f, col::bg, col::bg), maxW - 32.0f);
+        const float tw = usedWidth (it.text), th = it.text.getHeight();
+        it.bubble = { W - side - tw - 32.0f, y, tw + 32.0f, th + 22.0f };
+        it.textArea = { it.bubble.getX() + 16.0f, y + 11.0f, tw + 1.0f, th };
+        y = it.bubble.getBottom() + 18.0f;
+        items.push_back (std::move (it));
     }
-    else
-        apply (PresetAI::interpretLocal (lastPrompt, proc.getCurrentProgram()));
+    if (proc.isAiThinking())
+    {
+        Item it;
+        it.typing = true;
+        it.bubble = { aiX, y, 74.0f, 42.0f };
+        y += 42.0f + 18.0f;
+        items.push_back (std::move (it));
+    }
+    setSize (width, juce::jmax (minHeight, (int) y + 6));
 }
 
-void AiPanel::resized()
+void ChatList::paint (juce::Graphics& g)
 {
-    auto r = getLocalBounds().reduced (26, 0);
-    closeArea = { getWidth() - 50, 14, 30, 30 };
-    auto row = r.withTrimmedTop (64).withHeight (52);
-    makeButton.setBounds (row.removeFromRight (150));
-    row.removeFromRight (12);
-    input.setBounds (row);
+    const auto& chat = proc.getChat();
+    const int active = proc.getActiveChatSound();
+    const auto hoverHit = juce::isPositiveAndBelow (hover, (int) hits.size()) ? hits[(size_t) hover] : Hit {};
 
-    // example chips
-    chips.clear();
-    int x = r.getX(), y = 134;
-    for (auto& ex : PresetAI::examples())
+    for (auto& it : items)
     {
-        const int w = juce::GlyphArrangement::getStringWidthInt (uiFont (13.5f), ex) + 30;
-        if (x + w > r.getRight()) { x = r.getX(); y += 40; }
-        chips.push_back ({ { x, y, w, 30 }, ex });
-        x += w + 10;
+        if (it.user)
+        {
+            juce::ColourGradient cg (col::accent, it.bubble.getX(), it.bubble.getY(), col::hot, it.bubble.getRight(), it.bubble.getBottom(), false);
+            g.setGradientFill (cg);
+            g.fillRoundedRectangle (it.bubble, 16.0f);
+            it.text.draw (g, it.textArea);
+            continue;
+        }
+
+        // AI: avatar + bubble
+        drawSparkle (g, { 20.0f, it.bubble.getY() + 2.0f, 32.0f, 32.0f });
+        g.setColour (col::panel2.withAlpha (0.95f));
+        g.fillRoundedRectangle (it.bubble, 16.0f);
+        g.setColour (col::border.brighter (0.15f));
+        g.drawRoundedRectangle (it.bubble.reduced (0.5f), 16.0f, 1.0f);
+        if (it.typing)
+        {
+            for (int d = 0; d < 3; ++d)
+            {
+                const float a = 0.35f + 0.65f * (0.5f + 0.5f * std::sin (phase * 6.0f - (float) d * 0.9f));
+                g.setColour (col::text.withAlpha (a));
+                const float cx = it.bubble.getX() + 22.0f + (float) d * 15.0f, cy = it.bubble.getCentreY() - 2.0f * a + 1.0f;
+                g.fillEllipse (cx - 4.0f, cy - 4.0f, 8.0f, 8.0f);
+            }
+            continue;
+        }
+        it.text.draw (g, it.textArea);
+
+        if (it.card.isEmpty()) continue;
+        const auto& m = chat[(size_t) it.msg];
+        const auto c = col::category (m.kind);
+        const bool isActive = it.msg == active;
+        const bool hovCard = hoverHit.msg == it.msg;
+        auto r = it.card;
+        if (isActive)
+        {
+            g.setColour (c.withAlpha (0.12f));
+            g.fillRoundedRectangle (r.expanded (4.0f), 18.0f);
+        }
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2a2336).brighter (hovCard ? 0.08f : 0.0f), r.getX(), r.getY(),
+                                                 juce::Colour (0xff16121d), r.getX(), r.getBottom(), false));
+        g.fillRoundedRectangle (r, 14.0f);
+        g.setColour (isActive ? c : (hovCard ? c.withAlpha (0.55f) : col::border.brighter (0.2f)));
+        g.drawRoundedRectangle (r.reduced (0.5f), 14.0f, isActive ? 1.8f : 1.0f);
+        g.setColour (c);
+        g.fillRoundedRectangle (r.getX() + 10.0f, r.getY() + 16.0f, 4.0f, 44.0f, 2.0f);
+
+        g.setFont (uiFont (11.0f, true));
+        g.setColour (c);
+        g.drawText ((m.edited ? utf8 ("OPPDATERT  \xc2\xb7  ") : utf8 ("NY LYD  \xc2\xb7  ")) + juce::String (hk::categoryName (m.kind)).toUpperCase(),
+                    (int) r.getX() + 22, (int) r.getY() + 16, 300, 14, juce::Justification::centredLeft);
+        g.setFont (uiFont (22.0f, true));
+        g.setColour (col::text);
+        g.drawText (m.name, (int) r.getX() + 22, (int) r.getY() + 32, (int) r.getWidth() - 140, 30, juce::Justification::centredLeft);
+
+        // status badge
+        if (isActive || m.saved)
+        {
+            const auto label = isActive ? utf8 ("AKTIV") : utf8 ("LAGRET");
+            const auto bc = isActive ? c : col::air;
+            juce::Rectangle<float> b (r.getRight() - 84.0f, r.getY() + 16.0f, 66.0f, 22.0f);
+            g.setColour (bc.withAlpha (0.16f));
+            g.fillRoundedRectangle (b, 11.0f);
+            g.setColour (bc);
+            g.fillEllipse (b.getX() + 9.0f, b.getCentreY() - 3.0f, 6.0f, 6.0f);
+            g.setFont (uiFont (10.5f, true));
+            g.drawText (label, b.withTrimmedLeft (14.0f).toNearestInt(), juce::Justification::centred);
+        }
+
+        g.setFont (uiFont (12.5f, true));
+        for (auto& [cr, text] : it.chips)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.05f));
+            g.fillRoundedRectangle (cr, 12.0f);
+            g.setColour (juce::Colours::white.withAlpha (0.10f));
+            g.drawRoundedRectangle (cr.reduced (0.5f), 12.0f, 1.0f);
+            g.setColour (col::dim.brighter (0.5f));
+            g.drawText (text, cr.toNearestInt(), juce::Justification::centred);
+        }
+
+        auto hov = [&] (int action) { return hoverHit.msg == it.msg && hoverHit.action == action; };
+        // Spill
+        {
+            auto b = it.play;
+            juce::ColourGradient cg (col::accent, b.getX(), b.getY(), col::hot, b.getRight(), b.getBottom(), false);
+            g.setGradientFill (cg);
+            g.fillRoundedRectangle (b, 18.0f);
+            if (hov (1)) { g.setColour (juce::Colours::white.withAlpha (0.18f)); g.fillRoundedRectangle (b, 18.0f); }
+            juce::Path tri;
+            const float tx = b.getX() + 24.0f, ty = b.getCentreY();
+            tri.addTriangle (tx - 5.0f, ty - 7.0f, tx - 5.0f, ty + 7.0f, tx + 7.0f, ty);
+            g.setColour (col::bg);
+            g.fillPath (tri);
+            g.setFont (uiFont (14.5f, true));
+            g.drawText ("Spill", b.withTrimmedLeft (36.0f).toNearestInt(), juce::Justification::centredLeft);
+        }
+        // Lagre
+        {
+            auto b = it.save;
+            const auto sc = m.saved ? col::air : col::violet;
+            g.setColour (sc.withAlpha (hov (2) ? 0.34f : 0.2f));
+            g.fillRoundedRectangle (b, 18.0f);
+            g.setColour (sc.withAlpha (0.8f));
+            g.drawRoundedRectangle (b.reduced (0.5f), 18.0f, 1.2f);
+            g.setColour (col::text);
+            g.setFont (uiFont (14.5f, true));
+            g.drawText (m.saved ? utf8 ("\xe2\x9c\x93  Lagret") : utf8 ("Lagre"), b.toNearestInt(), juce::Justification::centred);
+        }
+        // Ny variant
+        {
+            auto b = it.variant;
+            g.setColour (juce::Colours::white.withAlpha (hov (3) ? 0.10f : 0.03f));
+            g.fillRoundedRectangle (b, 18.0f);
+            g.setColour (col::border.brighter (hov (3) ? 0.8f : 0.4f));
+            g.drawRoundedRectangle (b.reduced (0.5f), 18.0f, 1.2f);
+            g.setColour (col::text);
+            g.setFont (uiFont (14.5f, true));
+            g.drawText ("Ny variant", b.toNearestInt(), juce::Justification::centred);
+        }
     }
-
-    auto save = r.withTrimmedTop (getHeight() - 112).withHeight (40);
-    savePreset.setBounds (save.removeFromRight (180));
-    save.removeFromRight (10);
-    nameInput.setBounds (save.removeFromRight (360));
-
-    auto bottom = r.withTrimmedTop (getHeight() - 60).withHeight (34);
-    saveKey.setBounds (bottom.removeFromRight (90));
-    bottom.removeFromRight (10);
-    keyInput.setBounds (bottom.removeFromRight (420));
 }
 
-void AiPanel::mouseMove (const juce::MouseEvent& e)
+void ChatList::mouseMove (const juce::MouseEvent& e)
 {
     int h = -1;
-    for (size_t i = 0; i < chips.size(); ++i) if (chips[i].first.contains (e.getPosition())) h = (int) i;
-    if (closeArea.contains (e.getPosition())) h = 1000;
-    if (h != hoverChip) { hoverChip = h; repaint(); }
+    for (size_t i = 0; i < hits.size(); ++i) if (hits[i].r.contains (e.position)) { h = (int) i; break; }
+    if (h != hover) { hover = h; repaint(); }
     setMouseCursor (h >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
 }
 
-void AiPanel::mouseUp (const juce::MouseEvent& e)
+void ChatList::mouseExit (const juce::MouseEvent&) { if (hover != -1) { hover = -1; repaint(); } }
+
+void ChatList::mouseUp (const juce::MouseEvent& e)
 {
-    if (closeArea.contains (e.getPosition())) { setVisible (false); if (onClose) onClose(); return; }
-    for (auto& c : chips)
-        if (c.first.contains (e.getPosition())) { input.setText (c.second, false); run (c.second); return; }
+    for (auto& h : hits)
+    {
+        if (! h.r.contains (e.position)) continue;
+        juce::String msg;
+        switch (h.action)
+        {
+            case 1:  proc.useChatSound (h.msg, true); break;
+            case 2:  proc.saveChatSound (h.msg, msg); break;
+            case 3:  proc.chatVariant (h.msg); break;
+            default: proc.useChatSound (h.msg, false); break;
+        }
+        return;
+    }
 }
 
-void AiPanel::paint (juce::Graphics& g)
+//==============================================================================
+ChatPanel::ChatPanel (HouseKeysProcessor& p) : proc (p), list (p)
+{
+    view.setViewedComponent (&list, false);
+    view.setScrollBarsShown (true, false);
+    view.setScrollBarThickness (8);
+    view.getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId, col::border.brighter (0.4f));
+    addAndMakeVisible (view);
+
+    input.setFont (uiFont (16.0f));
+    input.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
+    input.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+    input.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
+    input.setColour (juce::TextEditor::textColourId, col::text);
+    input.setColour (juce::CaretComponent::caretColourId, col::accent);
+    input.setIndents (4, 14);
+    input.setTextToShowWhenEmpty (utf8 ("Beskriv en lyd \xe2\x80\x93 eller skriv \xc2\xab""fetere\xc2\xbb, \xc2\xabmer luft\xc2\xbb, \xc2\xabny variant\xc2\xbb \xe2\x80\xa6"), col::faint);
+    input.onReturnKey = [this] { send (input.getText()); };
+    addAndMakeVisible (input);
+
+    sendButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    sendButton.onClick = [this] { send (input.getText()); };
+    addAndMakeVisible (sendButton);
+
+    proc.chatChanged.addChangeListener (this);
+}
+
+ChatPanel::~ChatPanel() { proc.chatChanged.removeChangeListener (this); }
+
+void ChatPanel::open()
+{
+    setVisible (true);
+    toFront (true);
+    refresh (true);
+    input.grabKeyboardFocus();
+}
+
+void ChatPanel::visibilityChanged()
+{
+    if (isVisible()) startTimerHz (30); else stopTimer();
+}
+
+void ChatPanel::send (const juce::String& text)
+{
+    if (proc.isAiThinking() || text.trim().isEmpty()) return;
+    input.clear();
+    proc.sendChat (text);
+}
+
+void ChatPanel::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    const bool grew = proc.getChat().size() != lastCount || proc.isAiThinking() != lastBusy;
+    refresh (grew);
+}
+
+void ChatPanel::refresh (bool scrollToEnd)
+{
+    lastCount = proc.getChat().size();
+    lastBusy = proc.isAiThinking();
+    const auto keep = view.getViewPosition();
+    list.rebuild (juce::jmax (100, view.getWidth() - 10), view.getHeight());
+    if (scrollToEnd) view.setViewPosition (0, juce::jmax (0, list.getHeight() - view.getHeight()));
+    else view.setViewPosition (keep);
+    layoutChips();
+    sendButton.setEnabled (! lastBusy);
+    list.repaint();
+    repaint();
+}
+
+void ChatPanel::timerCallback()
+{
+    if (proc.isAiThinking()) { list.phase += 1.0f / 30.0f; list.repaint(); }
+    const bool f = input.hasKeyboardFocus (true);
+    if (f != lastFocus) { lastFocus = f; repaint (composer.expanded (4)); }
+}
+
+void ChatPanel::layoutChips()
+{
+    chips.clear();
+    bool anySound = false;
+    for (auto& m : proc.getChat()) anySound |= m.hasSound;
+    const auto options = anySound ? PresetAI::followUps() : PresetAI::examples();
+    int x = chipRow.getX();
+    for (auto& ex : options)
+    {
+        const int w = juce::GlyphArrangement::getStringWidthInt (uiFont (13.0f, true), ex) + 28;
+        if (x + w > chipRow.getRight()) break;
+        chips.push_back ({ { x, chipRow.getY(), w, chipRow.getHeight() }, ex });
+        x += w + 8;
+    }
+}
+
+void ChatPanel::resized()
+{
+    const int W = getWidth(), H = getHeight();
+    closeArea = { W - 52, 16, 32, 32 };
+    newArea = { W - 52 - 12 - 104, 18, 104, 30 };
+    composer = { 24, H - 20 - 52, W - 48, 52 };
+    chipRow = { 26, composer.getY() - 12 - 30, W - 52, 30 };
+    view.setBounds (12, 70, W - 24, chipRow.getY() - 10 - 70);
+    sendButton.setBounds (composer.getRight() - 46, composer.getY() + 6, 40, 40);
+    input.setBounds (composer.getX() + 18, composer.getY() + 3, composer.getWidth() - 18 - 54, composer.getHeight() - 6);
+    refresh (true);
+}
+
+void ChatPanel::paint (juce::Graphics& g)
 {
     auto all = getLocalBounds().toFloat();
     g.setColour (juce::Colour (0xff0d0a13));
     g.fillRoundedRectangle (all, 16.0f);
-    juce::ColourGradient glow (col::violet.withAlpha (0.22f), 0, 0, col::violet.withAlpha (0.0f), all.getWidth() * 0.6f, all.getHeight(), true);
+    juce::ColourGradient glow (col::violet.withAlpha (0.20f), 0, 0, col::violet.withAlpha (0.0f), all.getWidth() * 0.55f, all.getHeight(), true);
     g.setGradientFill (glow);
+    g.fillRoundedRectangle (all, 16.0f);
+    juce::ColourGradient glow2 (col::hot.withAlpha (0.10f), all.getRight(), all.getBottom(), col::hot.withAlpha (0.0f), all.getWidth() * 0.5f, all.getHeight() * 0.3f, true);
+    g.setGradientFill (glow2);
     g.fillRoundedRectangle (all, 16.0f);
     g.setColour (col::border.brighter (0.2f));
     g.drawRoundedRectangle (all.reduced (0.5f), 16.0f, 1.0f);
 
-    // title with sparkle
-    juce::ColourGradient tg (col::accent, 26.0f, 0.0f, col::violet, 360.0f, 0.0f, false);
-    tg.addColour (0.5, col::hot);
-    g.setGradientFill (tg);
-    g.setFont (uiFont (22.0f, true));
-    g.drawText (utf8 ("\u2726 AI  \u00b7  LAG LYDEN DU VIL HA"), 26, 16, 600, 32, juce::Justification::centredLeft);
+    // header
+    drawSparkle (g, { 24.0f, 16.0f, 38.0f, 38.0f });
+    g.setColour (col::text);
+    g.setFont (uiFont (19.0f, true));
+    g.drawText ("HouseKeys AI", 74, 14, 300, 24, juce::Justification::centredLeft);
+    g.setColour (juce::Colour (0xff45e0b0));
+    g.fillEllipse (75.0f, 44.0f, 7.0f, 7.0f);
+    g.setColour (col::dim);
+    g.setFont (uiFont (12.5f));
+    g.drawText (utf8 ("Gratis  \xc2\xb7  lager helt nye lyder  \xc2\xb7  virker uten internett"), 88, 38, 500, 18, juce::Justification::centredLeft);
 
-    g.setColour (hoverChip == 1000 ? col::text : col::dim);
+    const bool hasChat = ! proc.getChat().empty();
+    if (hasChat)
+    {
+        auto nb = newArea.toFloat();
+        g.setColour (juce::Colours::white.withAlpha (hover == 1001 ? 0.10f : 0.04f));
+        g.fillRoundedRectangle (nb, 15.0f);
+        g.setColour (col::border.brighter (hover == 1001 ? 0.8f : 0.4f));
+        g.drawRoundedRectangle (nb.reduced (0.5f), 15.0f, 1.0f);
+        g.setColour (hover == 1001 ? col::text : col::dim.brighter (0.3f));
+        g.setFont (uiFont (13.0f, true));
+        g.drawText ("+  Ny chat", newArea, juce::Justification::centred);
+    }
+    g.setColour (hover == 1000 ? col::text : col::dim);
     const auto c = closeArea.toFloat().reduced (9.0f);
     g.drawLine (c.getX(), c.getY(), c.getRight(), c.getBottom(), 2.2f);
     g.drawLine (c.getRight(), c.getY(), c.getX(), c.getBottom(), 2.2f);
+    g.setColour (col::border.withAlpha (0.8f));
+    g.fillRect (18, 68, getWidth() - 36, 1);
 
-    g.setFont (uiFont (13.5f));
+    // suggestion chips
+    g.setFont (uiFont (13.0f, true));
     for (size_t i = 0; i < chips.size(); ++i)
     {
         auto r = chips[i].first.toFloat();
-        const bool hov = (int) i == hoverChip;
-        g.setColour (hov ? col::accent.withAlpha (0.25f) : col::panel2);
+        const bool hov = (int) i == hover;
+        g.setColour (hov ? col::accent.withAlpha (0.22f) : juce::Colours::white.withAlpha (0.04f));
         g.fillRoundedRectangle (r, 15.0f);
-        g.setColour (hov ? col::accent : col::border.brighter (0.3f));
+        g.setColour (hov ? col::accent : col::border.brighter (0.35f));
         g.drawRoundedRectangle (r.reduced (0.5f), 15.0f, 1.0f);
-        g.setColour (hov ? col::text : col::dim);
+        g.setColour (hov ? col::text : col::dim.brighter (0.3f));
         g.drawText (chips[i].second, r.toNearestInt(), juce::Justification::centred);
     }
 
-    // result
-    const int ry = (chips.empty() ? 134 : chips.back().first.getBottom()) + 30;
-    if (resultTitle.isNotEmpty())
-    {
-        g.setColour (col::text);
-        g.setFont (uiFont (20.0f, true));
-        g.drawText (resultTitle, 26, ry, getWidth() - 52, 30, juce::Justification::centredLeft);
-        g.setFont (uiFont (14.5f));
-        int y = ry + 38;
-        for (auto& n : notes)
-        {
-            g.setColour (col::accent);
-            g.fillEllipse (30.0f, (float) y + 8.0f, 6.0f, 6.0f);
-            g.setColour (col::dim.brighter (0.4f));
-            g.drawText (n, 46, y, getWidth() - 80, 22, juce::Justification::centredLeft);
-            y += 26;
-        }
-    }
-    else
-    {
-        g.setColour (col::faint);
-        g.setFont (uiFont (14.5f));
-        g.drawMultiLineText (utf8 ("Skriv p\u00e5 norsk eller engelsk hva du vil ha \u2013 type lyd (piano, rhodes, pad, bass, lead, pluck, supersaw \u2026)\n"
-                                   "og hvordan den skal l\u00e5te (fet, m\u00f8rk, lys, luftig, bred, kort, lo-fi, med reverb, delay, pump, vibrato \u2026).\n"
-                                   "AI-en lager en NY lyd: den endrer selve lyddesignet (lag, oscillatorer, filter) og alle knappene.\n"
-                                   "Liker du den, gi den et navn og trykk \u00abLagre som preset\u00bb \u2013 da ligger den under Mine lyder."),
-                             26, ry + 20, getWidth() - 52);
-    }
+    // message box
+    auto cr = composer.toFloat();
+    g.setColour (juce::Colour (0xff1b1724));
+    g.fillRoundedRectangle (cr, 26.0f);
+    g.setColour (lastFocus ? col::accent.withAlpha (0.9f) : col::border.brighter (0.35f));
+    g.drawRoundedRectangle (cr.reduced (0.5f), 26.0f, lastFocus ? 1.6f : 1.0f);
+}
 
-    g.setColour (col::faint);
-    g.setFont (uiFont (12.0f));
-    g.drawText (keyInput.getText().trim().isEmpty() ? utf8 ("Bruker innebygd AI (gratis, uten internett)")
-                                                    : utf8 ("Bruker Claude (din API-n\u00f8kkel)"),
-                26, getHeight() - 60, 400, 34, juce::Justification::centredLeft);
+void ChatPanel::mouseMove (const juce::MouseEvent& e)
+{
+    int h = -1;
+    for (size_t i = 0; i < chips.size(); ++i) if (chips[i].first.contains (e.getPosition())) h = (int) i;
+    if (closeArea.contains (e.getPosition())) h = 1000;
+    if (! proc.getChat().empty() && newArea.contains (e.getPosition())) h = 1001;
+    if (h != hover) { hover = h; repaint(); }
+    setMouseCursor (h >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void ChatPanel::mouseExit (const juce::MouseEvent&) { if (hover != -1) { hover = -1; repaint(); } }
+
+void ChatPanel::mouseUp (const juce::MouseEvent& e)
+{
+    if (closeArea.contains (e.getPosition())) { setVisible (false); if (onClose) onClose(); return; }
+    if (! proc.getChat().empty() && newArea.contains (e.getPosition())) { proc.clearChat(); return; }
+    for (auto& c : chips)
+        if (c.first.contains (e.getPosition())) { send (c.second); return; }
+}
+
+void ChatPanel::SendButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    if (isEnabled())
+    {
+        juce::ColourGradient cg (col::accent, r.getX(), r.getY(), col::hot, r.getRight(), r.getBottom(), false);
+        g.setGradientFill (cg);
+    }
+    else g.setColour (col::panel2.brighter (0.2f));
+    g.fillEllipse (r);
+    if (highlighted && isEnabled()) { g.setColour (juce::Colours::white.withAlpha (down ? 0.3f : 0.15f)); g.fillEllipse (r); }
+    // arrow up
+    const auto c = r.getCentre();
+    juce::Path a;
+    a.startNewSubPath (c.x, c.y + 8.0f);
+    a.lineTo (c.x, c.y - 8.0f);
+    a.startNewSubPath (c.x - 7.0f, c.y - 1.5f);
+    a.lineTo (c.x, c.y - 8.5f);
+    a.lineTo (c.x + 7.0f, c.y - 1.5f);
+    g.setColour (isEnabled() ? col::bg : col::dim);
+    g.strokePath (a, juce::PathStrokeType (2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 //==============================================================================

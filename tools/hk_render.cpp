@@ -150,33 +150,58 @@ void writeWav (const juce::File& f, const std::vector<float>& L, const std::vect
 
 int main (int argc, char** argv)
 {
-    if (std::getenv ("HK_AI_TEST") != nullptr)   // print what the built-in AI makes of each line on stdin
+    if (std::getenv ("HK_LEVEL_CHECK") != nullptr)   // does autoLevel agree with the factory calibration?
     {
+        std::unique_ptr<hk::SampleBank> bk = SampleLibrary::loadBuiltIn();
+        for (int i = 0; i < hk::kNumSounds; ++i)
+        {
+            const auto& d = hk::sounds()[(size_t) i];
+            if (d.sampler.user || i == hk::kAiSound) continue;
+            int ref = -1;   // first sound of the same category
+            for (int j = 0; j < hk::kNumSounds && ref < 0; ++j) if (hk::sounds()[(size_t) j].category == d.category) ref = j;
+            PresetAI::Result r; r.hasSound = true; r.def = d; r.kind = d.category; r.levelSound = ref;
+            PresetAI::autoLevel (r, bk.get(), nullptr);
+            std::printf ("%-22s vs %-22s  %+.1f dB\n", d.name, hk::sounds()[(size_t) ref].name, r.def.gainDb - d.gainDb);
+        }
+        return 0;
+    }
+    if (std::getenv ("HK_AI_TEST") != nullptr)   // chat with the AI: each stdin line is one message
+    {
+        std::unique_ptr<hk::SampleBank> bk = SampleLibrary::loadBuiltIn();
+        std::vector<float> XL, XR;
+        std::unique_ptr<PresetAI::Context> ctx;
+        juce::uint32 seed = std::getenv ("HK_SEED") ? (juce::uint32) std::atoi (std::getenv ("HK_SEED")) : 1234u;
         char line[512];
         while (std::fgets (line, sizeof line, stdin))
         {
             const auto text = juce::String::fromUTF8 (line).trim();
             if (text.isEmpty()) continue;
-            const auto r = PresetAI::interpretLocal (text, hk::kDefaultSound);
-            std::printf ("%-40s -> \"%s\" (base %s)\n     %s\n", text.toRawUTF8(), r.name.toRawUTF8(),
-                         r.baseSound >= 0 ? hk::sounds()[(size_t) r.baseSound].name : "-",
-                         r.notes.joinIntoString (" | ").toRawUTF8());
-            if (argc > 1)   // render each AI sound into one file
+            const auto t0 = std::chrono::steady_clock::now();
+            auto r = PresetAI::respond (text, ctx.get(), seed++);
+            const float g0 = r.def.gainDb;
+            PresetAI::autoLevel (r, bk.get(), ctx.get());
+            const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+            std::printf ("\n> %s\n  %s\n", text.toRawUTF8(), r.reply.toRawUTF8());
+            if (! r.hasSound) continue;
+            std::printf ("  [%s] kind=%d parents=%d,%d gain %.1f -> %.1f dB (%.0f ms)\n  chips: %s\n", r.name.toRawUTF8(), r.kind,
+                         r.parentA, r.parentB, g0, r.def.gainDb, ms, r.chips.joinIntoString (" | ").toRawUTF8());
+            if (! ctx) ctx = std::make_unique<PresetAI::Context>();
+            ctx->def = r.def; ctx->name = r.name; ctx->kind = r.kind; ctx->request = r.request; ctx->isFactory = false;
+            if (argc > 1)
             {
-                static std::unique_ptr<hk::SampleBank> bk = SampleLibrary::loadBuiltIn();
-                static std::vector<float> XL, XR;
                 hk::SoundDef d = r.def;
                 hk::Params prm = d.preset; prm.sound = hk::kAiSound;
                 int total = 0; double c = 0;
-                auto evs = phraseFor (d.category, 44100, 124.0, total);
+                auto evs = phraseFor (r.kind, 44100, 124.0, total);
                 std::vector<float> L1, R1;
                 render (bk.get(), prm, evs, total, 44100, 124.0, L1, R1, c, &d);
-                float peak = 0; for (auto v : L1) peak = std::max (peak, std::abs (v));
-                std::printf ("     peak %.3f\n", peak);
+                float peak = 0; double sum = 0;
+                for (size_t i = 0; i < L1.size(); ++i) { peak = std::max (peak, std::abs (L1[i])); sum += L1[i] * (double) L1[i]; }
+                std::printf ("  phrase peak %.2f rms %.1f dB\n", peak, 10 * std::log10 (sum / (double) L1.size() + 1e-12));
                 XL.insert (XL.end(), L1.begin(), L1.end()); XR.insert (XR.end(), R1.begin(), R1.end());
-                writeWav (juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]), XL, XR, 44100);
             }
         }
+        if (argc > 1) writeWav (juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]), XL, XR, 44100);
         return 0;
     }
     if (argc < 2) { std::printf ("usage: hk_render out.wav [sound] [gate notes...]\n"); return 1; }

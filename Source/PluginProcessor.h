@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Engine.h"
+#include "PresetAI.h"
 #include <map>
 
 class HouseKeysProcessor : public juce::AudioProcessor,
@@ -55,6 +56,30 @@ public:
     bool hasCustomSound() const { return customDef.load() != nullptr; }
     const hk::SoundDef& defFor (int index) const;
 
+    // AI chat (free, offline). The conversation lives here so it survives closing the window.
+    struct ChatMessage
+    {
+        bool fromUser = false;
+        juce::String text;
+        bool hasSound = false;
+        hk::SoundDef def;
+        juce::String name, request;
+        int kind = hk::kCatHousePiano;
+        juce::StringArray chips;
+        bool saved = false;
+        bool edited = false;   // a change of the sound before (not a brand-new sound)
+    };
+    const std::vector<ChatMessage>& getChat() const { return chat; }
+    bool isAiThinking() const { return aiBusy; }
+    int getActiveChatSound() const;                 // message whose sound is playing now, or -1
+    void sendChat (const juce::String& text);
+    void useChatSound (int index, bool preview);
+    bool saveChatSound (int index, juce::String& message);
+    void chatVariant (int index);
+    void clearChat();
+    void previewSound (int kind, bool mono) { previewRequest.store (kind | (mono ? 256 : 0)); }
+    juce::ChangeBroadcaster chatChanged;
+
     // Drag & drop: load any audio file as the "Ditt sample" sound. Message thread only.
     bool loadUserSample (const juce::File& file, juce::String& message);
     juce::String getUserSampleName() const { return userName; }
@@ -70,6 +95,18 @@ private:
     void setParam (const juce::String& id, float value);
     void handleMidi (const juce::MidiMessage& m);
     float raw (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
+
+    void finishChat (PresetAI::Result r);
+    juce::String uniqueName (const juce::String& base) const;
+    std::vector<ChatMessage> chat;
+    bool aiBusy = false;
+    int activeChat = -1;
+    const hk::SoundDef* activeDef = nullptr;
+    int customKind = hk::kCatHousePiano;
+    std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
+    std::atomic<int> previewRequest { -1 };
+    int pvPos = -1, pvKind = 0;   // audio thread
+    bool pvMono = false;
 
     hk::Engine engine;
     juce::AudioBuffer<float> scratch;

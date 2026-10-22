@@ -116,10 +116,12 @@ HouseKeysProcessor::HouseKeysProcessor()
 {
     apvts.addParameterListener ("sound", this);
     SampleLibrary::get();   // start loading the piano samples in the background
+    for (int k = 0; k < hk::kNumCategories; ++k) { PresetAI::previewPattern (k, false); PresetAI::previewPattern (k, true); }  // build the static tables here, not on the audio thread
 }
 
 HouseKeysProcessor::~HouseKeysProcessor()
 {
+    alive->store (false);   // an AI answer still on its way is dropped
     apvts.removeParameterListener ("sound", this);
     cancelPendingUpdate();
 }
@@ -208,6 +210,7 @@ bool HouseKeysProcessor::saveCustomPreset (const juce::String& rawName, juce::St
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
     root->setProperty ("name", name);
     root->setProperty ("version", 1);
+    root->setProperty ("kind", customKind);
     root->setProperty ("sound", json);
     auto folder = presetFolder();
     folder.createDirectory();
@@ -228,8 +231,157 @@ bool HouseKeysProcessor::loadCustomPreset (const juce::File& file)
     if (! root.isObject()) return false;
     hk::SoundDef d = hk::sounds()[(size_t) hk::kFreshHouse];
     codec::fromVar (root.getProperty ("sound", {}), d);
+    customKind = (int) root.getProperty ("kind", hk::kCatHousePiano);
     applyCustomSound (d, root.getProperty ("name", file.getFileNameWithoutExtension()).toString());
     return true;
+}
+
+//==============================================================================
+int HouseKeysProcessor::getActiveChatSound() const
+{
+    if (activeChat < 0 || activeChat >= (int) chat.size()) return -1;
+    return ((int) raw ("sound") == hk::kAiSound && customDef.load() == activeDef) ? activeChat : -1;
+}
+
+juce::String HouseKeysProcessor::uniqueName (const juce::String& base) const
+{
+    auto taken = [this] (const juce::String& n)
+    {
+        for (auto& m : chat) if (m.hasSound && m.name.equalsIgnoreCase (n)) return true;
+        return presetFolder().getChildFile (juce::File::createLegalFileName (n) + ".hkpreset").existsAsFile();
+    };
+    if (! taken (base)) return base;
+    for (int i = 2; i < 100; ++i)
+        if (! taken (base + " " + juce::String (i))) return base + " " + juce::String (i);
+    return base;
+}
+
+void HouseKeysProcessor::sendChat (const juce::String& rawText)
+{
+    const auto text = rawText.trim();
+    if (aiBusy || text.isEmpty()) return;
+    ChatMessage um;
+    um.fromUser = true;
+    um.text = text;
+    chat.push_back (um);
+    aiBusy = true;
+    chatChanged.sendChangeMessage();
+
+    // what the conversation is about: the AI sound that is playing, or the factory sound you are on
+    std::shared_ptr<PresetAI::Context> ctx;
+    const int cur = getCurrentProgram();
+    if (cur == hk::kAiSound && customDef.load() != nullptr)
+    {
+        ctx = std::make_shared<PresetAI::Context>();
+        ctx->def = *customDef.load();
+        ctx->def.preset = readParams();          // includes your own knob tweaks
+        ctx->name = customName;
+        const int a = getActiveChatSound();
+        ctx->kind = a >= 0 ? chat[(size_t) a].kind : customKind;
+        ctx->request = a >= 0 ? chat[(size_t) a].request : customName;
+    }
+    else if (cur != hk::kDroppedSample)
+    {
+        ctx = std::make_shared<PresetAI::Context>();
+        ctx->def = hk::sounds()[(size_t) cur];
+        ctx->def.preset = readParams();
+        ctx->name = juce::String::fromUTF8 (hk::sounds()[(size_t) cur].name);
+        ctx->kind = ctx->def.category;
+        ctx->request = ctx->name;
+        ctx->isFactory = true;
+    }
+
+    const auto seed = (juce::uint32) juce::Random::getSystemRandom().nextInt();
+    auto flag = alive;
+    juce::Thread::launch ([this, flag, ctx, text, seed]
+    {
+        const auto start = juce::Time::getMillisecondCounter();
+        auto r = PresetAI::respond (text, ctx.get(), seed);
+        if (r.hasSound) PresetAI::autoLevel (r, SampleLibrary::get(), ctx.get());
+        const auto took = juce::Time::getMillisecondCounter() - start;
+        if (took < 700) juce::Thread::sleep ((int) (700 - took));   // let the "typing" dots show
+        juce::MessageManager::callAsync ([this, flag, r] { if (flag->load()) finishChat (r); });
+    });
+}
+
+void HouseKeysProcessor::finishChat (PresetAI::Result r)
+{
+    aiBusy = false;
+    ChatMessage m;
+    m.text = r.reply;
+    if (r.renamed)
+    {
+        const int a = getActiveChatSound();
+        if (a >= 0) chat[(size_t) a].name = r.name;
+        if (customDef.load() != nullptr && getCurrentProgram() == hk::kAiSound)
+        {
+            // new name, same sound and the same knob settings
+            hk::SoundDef d = *customDef.load();
+            customNames.push_back (std::make_unique<std::string> (r.name.toStdString()));
+            d.name = customNames.back()->c_str();
+            customDefs.push_back (std::make_unique<hk::SoundDef> (d));
+            customDef.store (customDefs.back().get());
+            customName = r.name;
+            if (a >= 0) activeDef = customDef.load();
+        }
+    }
+    else if (r.hasSound)
+    {
+        const bool isNew = r.levelSound >= 0;
+        m.hasSound = true;
+        m.def = r.def;
+        m.name = isNew ? uniqueName (r.name) : r.name;
+        if (m.name != r.name) m.text = m.text.replace ("**" + r.name + "**", "**" + m.name + "**");
+        m.kind = r.kind;
+        m.chips = r.chips;
+        m.request = r.request;
+        m.edited = ! isNew;
+    }
+    chat.push_back (m);
+    if (m.hasSound) useChatSound ((int) chat.size() - 1, false);
+    chatChanged.sendChangeMessage();
+}
+
+void HouseKeysProcessor::useChatSound (int index, bool preview)
+{
+    if (! juce::isPositiveAndBelow (index, (int) chat.size()) || ! chat[(size_t) index].hasSound) return;
+    auto& m = chat[(size_t) index];
+    if (getActiveChatSound() != index)
+    {
+        customKind = m.kind;
+        applyCustomSound (m.def, m.name);
+        activeChat = index;
+        activeDef = customDef.load();
+    }
+    if (preview) previewSound (m.kind, m.def.mono);
+    chatChanged.sendChangeMessage();
+}
+
+bool HouseKeysProcessor::saveChatSound (int index, juce::String& message)
+{
+    if (! juce::isPositiveAndBelow (index, (int) chat.size()) || ! chat[(size_t) index].hasSound) return false;
+    useChatSound (index, false);
+    const bool ok = saveCustomPreset (chat[(size_t) index].name, message);
+    activeChat = index;
+    activeDef = customDef.load();
+    chat[(size_t) index].saved = ok;
+    chatChanged.sendChangeMessage();
+    return ok;
+}
+
+void HouseKeysProcessor::chatVariant (int index)
+{
+    if (aiBusy) return;
+    useChatSound (index, false);
+    sendChat (juce::String::fromUTF8 ("Ny variant"));
+}
+
+void HouseKeysProcessor::clearChat()
+{
+    if (aiBusy) return;
+    chat.clear();
+    activeChat = -1;
+    chatChanged.sendChangeMessage();
 }
 
 void HouseKeysProcessor::selectSound (int index)
@@ -312,6 +464,21 @@ void HouseKeysProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (to > from)
             engine.process (L + from, R + from, to - from, bpm, ppq + from * bpm / 60.0 / sr, playing);
     };
+
+    // "Spill" button in the AI chat: a short phrase played straight into the engine
+    if (const int req = previewRequest.exchange (-1); req >= 0)
+    {
+        engine.allNotesOff();
+        pvKind = req & 255; pvMono = (req & 256) != 0; pvPos = 0;
+    }
+    if (pvPos >= 0)
+    {
+        const auto& pat = PresetAI::previewPattern (pvKind, pvMono);
+        for (auto& e : pat) { const int off = (int) (e.t1 * sr); if (off >= pvPos && off < pvPos + numSamples) engine.noteOff (e.note); }
+        for (auto& e : pat) { const int on = (int) (e.t0 * sr);   if (on >= pvPos && on < pvPos + numSamples) engine.noteOn (e.note, e.vel); }
+        pvPos += numSamples;
+        if (pvPos > (int) ((PresetAI::previewLength (pvKind, pvMono) + 0.1f) * sr)) pvPos = -1;
+    }
 
     int pos = 0;
     for (const auto meta : midi)

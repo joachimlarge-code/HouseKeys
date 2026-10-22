@@ -1,7 +1,12 @@
+// HouseKeys AI - a free, offline sound designer.
+//
+// New sound:  pick the kind of sound from the words -> choose two "parent" factory sounds that fit
+//             (tags decide) -> cross-breed every layer and setting -> mutate -> maybe add a spice layer
+//             -> shape with the words (fet, mørk, luftig, pump ...) -> name it -> match loudness.
+// Follow-up:  "fetere", "mer luft", "uten reverb", "ny variant", "kall den X" change the current sound.
 #include "PresetAI.h"
-#include <juce_events/juce_events.h>
-#include "Sounds.h"
 #include "SoundCodec.h"
+#include "Engine.h"
 
 namespace PresetAI
 {
@@ -44,19 +49,25 @@ bool contains (const juce::StringArray& w, std::initializer_list<const char*> ke
     return false;
 }
 
+bool isMoreLess (const juce::String& word)
+{
+    for (auto* k : { "mer", "mindre", "more", "less", "litt", "lite", "mye" }) if (word == k) return true;
+    return false;
+}
+
 const std::map<int, std::vector<const char*>>& categoryNouns()
 {
     static const std::map<int, std::vector<const char*>> m = {
         { hk::kCatRealPiano,  { "piano", "flygel", "grand", "klaver" } },
         { hk::kCatHousePiano, { "piano", "flygel", "klaver" } },
-        { hk::kCatDeepKeys,   { "keys", "orgel", "organ", "stab" } },
+        { hk::kCatDeepKeys,   { "keys", "orgel", "organ", "stab", "stabs" } },
         { hk::kCatRhodes,     { "rhodes", "epiano", "elpiano", "wurli", "electric" } },
-        { hk::kCatSupersaw,   { "supersaw", "chord", "chords", "akkord", "akkorder", "stab", "trance" } },
+        { hk::kCatSupersaw,   { "supersaw", "chord", "chords", "akkord", "akkorder", "stab", "stabs", "trance" } },
         { hk::kCatSynths,     { "synth", "synther", "poly", "brass", "juno", "strings", "strykere" } },
         { hk::kCatLeads,      { "lead", "leads", "melodi", "melody", "sagtann" } },
         { hk::kCatPads,       { "pad", "pads", "flate", "ambient", "atmosfaere", "bakgrunn" } },
-        { hk::kCatBass,       { "bass", "basslinje", "bassline", "sub", "808" } },
-        { hk::kCatPlucks,     { "pluck", "plucks", "plukk" } },
+        { hk::kCatBass,       { "bass", "basslinje", "bassline", "808" } },
+        { hk::kCatPlucks,     { "pluck", "plucks", "plukk", "arp", "arpeggio" } },
     };
     return m;
 }
@@ -84,7 +95,7 @@ const std::map<int, std::vector<const char*>>& soundTags()
         { hk::kShortOrganStab,   { "kort", "short", "orgel", "organ", "tett" } },
         { hk::kWarmRhodes,       { "varm", "warm", "soul", "jazz", "neo" } },
         { hk::kLofiRhodes,       { "lofi", "tape", "chill", "stovete", "dusty", "vintage" } },
-        { hk::kSupersawChords,   { "chords" } },
+        { hk::kSupersawChords,   { "chords", "akkorder" } },
         { hk::kEuphoricSupersaw, { "euforisk", "euphoric", "stor", "episk", "epic", "festival", "drop", "big" } },
         { hk::kSupersawStab,     { "kort", "short", "punchy", "stab" } },
         { hk::kMelodicChords,    { "melodisk", "melodic" } },
@@ -124,6 +135,7 @@ float intensityBefore (const juce::StringArray& w, int at)
 {
     for (int i = juce::jmax (0, at - 2); i < at; ++i)
     {
+        if (contains (juce::StringArray (w[i]), { "mindre", "less", "lavere" })) return -0.6f;
         if (contains (juce::StringArray (w[i]), { "litt", "slightly", "bit", "lite", "subtle", "subtil" })) return 0.5f;
         if (contains (juce::StringArray (w[i]), { "mye", "veldig", "very", "masse", "ekstra", "extra", "super", "mega", "mer", "more", "much" })) return 1.6f;
     }
@@ -133,31 +145,677 @@ float intensityBefore (const juce::StringArray& w, int at)
 bool negatedBefore (const juce::StringArray& w, int at)
 {
     for (int i = juce::jmax (0, at - 2); i < at; ++i)
-        if (contains (juce::StringArray (w[i]), { "uten", "ingen", "ikke", "no", "without", "not", "fjern" })) return true;
+        if (contains (juce::StringArray (w[i]), { "uten", "ingen", "ikke", "no", "without", "not", "fjern", "skru" })) return true;
     return false;
 }
 
+const char* kindName (int c)   // Norwegian, for sentences
+{
+    static const char* n[hk::kNumCategories] = { "piano", "house-piano", "deep house keys", "rhodes", "supersaw",
+                                                  "synth", "lead", "pad", "bass", "pluck", "sample", "lyd" };
+    return n[juce::jlimit (0, hk::kNumCategories - 1, c)];
+}
+
+//==============================================================================
 struct Builder
 {
     const hk::Params base;
-    Result& r;
+    std::map<juce::String, float>& m;
     float get (const char* id)
     {
-        auto it = r.params.find (id);
-        if (it != r.params.end()) return it->second;
+        auto it = m.find (id);
+        if (it != m.end()) return it->second;
         const juce::String s (id);
         if (s == "tone") return base.tone;           if (s == "air") return base.air;
         if (s == "attack") return base.attackMs;     if (s == "decay") return base.decay;
         if (s == "release") return base.releaseS;    if (s == "width") return base.width;
         if (s == "reverbMix") return base.reverbMix; if (s == "reverbSize") return base.reverbSize;
         if (s == "chorusMix") return base.chorusMix; if (s == "delayMix") return base.delayMix;
+        if (s == "delayFb") return base.delayFeedback;
         if (s == "satDrive") return base.satDrive;   if (s == "cutoff") return base.cutoffHz;
         if (s == "pumpDepth") return base.pumpDepth; if (s == "volume") return base.volumeDb;
+        if (s == "vibDepth") return base.vibDepth;
         return 0.0f;
     }
-    void set (const char* id, float v) { clampParam (id, v); r.params[id] = v; }
+    void set (const char* id, float v) { clampParam (id, v); m[id] = v; }
     void add (const char* id, float d) { set (id, get (id) + d); }
+    void scale (const char* id, float k) { set (id, get (id) * k); }
 };
+
+void writeParams (const std::map<juce::String, float>& m, hk::Params& p)
+{
+    for (auto& [id, v] : m)
+    {
+        if (id == "tone") p.tone = v;              else if (id == "air") p.air = v;
+        else if (id == "attack") p.attackMs = v;   else if (id == "decay") p.decay = v;
+        else if (id == "release") p.releaseS = v;  else if (id == "width") p.width = v;
+        else if (id == "volume") p.volumeDb = v;   else if (id == "chord") p.chord = (int) v;
+        else if (id == "filterOn") p.filterOn = v > 0.5f; else if (id == "cutoff") p.cutoffHz = v; else if (id == "reso") p.resonance = v;
+        else if (id == "satOn") p.satOn = v > 0.5f;       else if (id == "satDrive") p.satDrive = v;
+        else if (id == "chorusOn") p.chorusOn = v > 0.5f; else if (id == "chorusMix") p.chorusMix = v;
+        else if (id == "delayOn") p.delayOn = v > 0.5f;   else if (id == "delayTime") p.delayTime = (int) v;
+        else if (id == "delayFb") p.delayFeedback = v;    else if (id == "delayMix") p.delayMix = v;
+        else if (id == "reverbOn") p.reverbOn = v > 0.5f; else if (id == "reverbSize") p.reverbSize = v; else if (id == "reverbMix") p.reverbMix = v;
+        else if (id == "pumpOn") p.pumpOn = v > 0.5f;     else if (id == "pumpRate") p.pumpRate = (int) v; else if (id == "pumpDepth") p.pumpDepth = v;
+        else if (id == "vibOn") p.vibOn = v > 0.5f;       else if (id == "vibRate") p.vibRate = v; else if (id == "vibDepth") p.vibDepth = v;
+    }
+}
+
+void clampParams (hk::Params& p)
+{
+    auto c = [] (float& v, float lo, float hi) { v = juce::jlimit (lo, hi, std::isfinite (v) ? v : lo); };
+    c (p.tone, 0, 1); c (p.air, 0, 1); c (p.attackMs, 0, 2000); c (p.decay, 0, 1); c (p.releaseS, 0.01f, 6); c (p.width, 0, 1);
+    c (p.volumeDb, -24, 6); c (p.cutoffHz, 80, 18000); c (p.resonance, 0, 1); c (p.satDrive, 0, 1); c (p.chorusMix, 0, 1);
+    c (p.delayFeedback, 0, 0.9f); c (p.delayMix, 0, 1); c (p.reverbMix, 0, 1); c (p.reverbSize, 0, 1); c (p.pumpDepth, 0, 1);
+    c (p.vibRate, 0.5f, 12); c (p.vibDepth, 0, 1);
+    p.delayTime = juce::jlimit (0, 5, p.delayTime); p.pumpRate = juce::jlimit (0, 2, p.pumpRate); p.chord = juce::jlimit (0, 6, p.chord);
+}
+
+//==============================================================================
+// Controls (the knobs and effects). Returns notes in Norwegian.
+void applyControls (const juce::StringArray& w, Builder& b, juce::StringArray& notes)
+{
+    int at = 0;
+    auto has = [&] (std::initializer_list<const char*> k) { return contains (w, k, &at); };
+    auto k = [&] { return intensityBefore (w, at); };
+
+    if (has ({ "lys", "lysere", "bright", "brighter", "skarp", "crisp", "glitrende", "sparkling", "klar", "clear" }))
+    { const float i = k(); b.add ("tone", 0.15f * i); b.add ("air", 0.2f * i); notes.add (i < 0 ? u ("Mindre lys") : u ("Lysere tone og mer Air")); }
+    if (has ({ "mork", "morkere", "dark", "darker", "dempet", "muffled", "dull" }))
+    { const float i = k(); b.add ("tone", -0.2f * i); b.add ("air", -0.25f * i); notes.add (i < 0 ? u ("Mindre m\xc3\xb8rk") : u ("M\xc3\xb8rkere tone")); }
+    if (has ({ "varm", "varmere", "warm", "warmer" }))
+    { const float i = k(); b.add ("tone", -0.08f * i); notes.add (u ("Varmere")); }
+    if (has ({ "luftig", "luft", "airy", "air", "fresh", "frisk", "apen", "open" }))
+    { const float i = k(); b.add ("air", 0.3f * i); notes.add (i < 0 ? u ("Mindre Air") : u ("Mer Air (luft og detaljer i toppen)")); }
+    if (has ({ "bred", "bredere", "wide", "wider", "stor", "big", "huge", "enorm" }))
+    { const float i = k(); b.add ("width", 0.18f * i); b.add ("reverbSize", 0.12f * i); notes.add (i < 0 ? u ("Smalere stereo") : u ("Bredere stereo")); }
+    if (has ({ "smal", "smalere", "narrow", "tett" }))
+    { b.add ("width", -0.25f); notes.add (u ("Smalere stereo")); }
+
+    if (has ({ "fet", "fetere", "feit", "feitere", "fat", "fatter", "kraftig", "tung", "tyngre", "heavy", "punch", "punchy", "hard", "aggressiv", "aggressive" }))
+    {
+        const float i = k();
+        if (i < 0) { b.scale ("satDrive", 0.5f); notes.add (u ("Mindre drive")); }
+        else { b.set ("satOn", 1); b.set ("satDrive", juce::jmin (0.6f, 0.25f * i + 0.1f)); notes.add (u ("Saturation p\xc3\xa5 for mer kraft")); }
+    }
+    if (has ({ "distortion", "distort", "skitten", "dirty", "crunchy", "drive", "mettet", "saturated", "saturation" }))
+    {
+        const float i = k();
+        if (negatedBefore (w, at)) { b.set ("satOn", 0); notes.add (u ("Saturation av")); }
+        else if (i < 0) { b.scale ("satDrive", 0.5f); notes.add (u ("Mindre drive")); }
+        else { b.set ("satOn", 1); b.set ("satDrive", juce::jmin (0.85f, 0.4f * i)); notes.add (u ("Mer saturation / drive")); }
+    }
+
+    if (has ({ "reverb", "romklang", "hall", "rom", "space", "ambient", "drommende", "dreamy", "romslig" }))
+    {
+        const float i = k();
+        if (negatedBefore (w, at)) { b.set ("reverbOn", 0); notes.add (u ("Reverb av")); }
+        else if (i < 0) { b.scale ("reverbMix", 0.55f); notes.add (u ("Mindre reverb")); }
+        else { b.set ("reverbOn", 1); b.set ("reverbMix", juce::jmax (b.get ("reverbMix"), 0.22f + 0.14f * i)); b.add ("reverbSize", 0.15f * i);
+               notes.add (u ("Mer reverb")); }
+    }
+    if (has ({ "tort", "torr", "torrere", "dry", "drier" })) { b.set ("reverbOn", 0); b.set ("delayOn", 0); notes.add (u ("T\xc3\xb8rr lyd (reverb og delay av)")); }
+    if (has ({ "delay", "ekko", "echo", "pingpong" }))
+    {
+        const float i = k();
+        if (negatedBefore (w, at)) { b.set ("delayOn", 0); notes.add (u ("Delay av")); }
+        else if (i < 0) { b.scale ("delayMix", 0.55f); notes.add (u ("Mindre delay")); }
+        else { b.set ("delayOn", 1); b.set ("delayMix", 0.14f + 0.08f * i); b.set ("delayFb", 0.3f + 0.08f * i); notes.add (u ("Delay p\xc3\xa5")); }
+    }
+    if (has ({ "chorus", "wobble", "shimmer" }))
+    {
+        const float i = k();
+        if (negatedBefore (w, at)) { b.set ("chorusOn", 0); notes.add (u ("Chorus av")); }
+        else if (i < 0) { b.scale ("chorusMix", 0.55f); notes.add (u ("Mindre chorus")); }
+        else { b.set ("chorusOn", 1); b.set ("chorusMix", 0.25f + 0.12f * i); notes.add (u ("Chorus p\xc3\xa5")); }
+    }
+    if (has ({ "pump", "pumpende", "pumping", "sidechain", "ducking", "bouncy", "sprettende" }))
+    {
+        const float i = k();
+        if (negatedBefore (w, at)) { b.set ("pumpOn", 0); notes.add (u ("Pump av")); }
+        else if (i < 0) { b.scale ("pumpDepth", 0.6f); notes.add (u ("Mindre pump")); }
+        else { b.set ("pumpOn", 1); b.set ("pumpDepth", juce::jmin (0.9f, 0.4f + 0.2f * i)); notes.add (u ("Pump i takt med kicken")); }
+    }
+    if (has ({ "vibrato", "vibrerende", "wobbly" }))
+    {
+        const float i = k();
+        if (negatedBefore (w, at) || i < 0) { b.set ("vibOn", 0); notes.add (u ("Vibrato av")); }
+        else { b.set ("vibOn", 1); b.set ("vibDepth", 0.2f * i + 0.05f); notes.add (u ("Vibrato p\xc3\xa5")); }
+    }
+    if (has ({ "filter", "filtrert", "filtered", "lowpass", "lavpass", "filtrer" }))
+    {
+        if (negatedBefore (w, at)) { b.set ("filterOn", 0); notes.add (u ("Filter av")); }
+        else { b.set ("filterOn", 1); b.set ("cutoff", 1200.0f); b.set ("reso", 0.25f); notes.add (u ("Filter p\xc3\xa5 (1,2 kHz)")); }
+    }
+
+    if (has ({ "kort", "kortere", "short", "shorter", "staccato", "stab", "stabbete", "tight" }))
+    { b.scale ("decay", 0.55f); b.set ("release", juce::jmin (b.get ("release"), 0.12f)); notes.add (u ("Kortere toner")); }
+    if (has ({ "lang", "lange", "lengre", "long", "longer", "sustain", "svevende", "evig", "langt" }))
+    { b.set ("decay", juce::jmax (0.75f, b.get ("decay"))); b.add ("release", 0.5f); notes.add (u ("Lengre toner")); }
+    if (has ({ "swell", "fade", "langsom", "slow", "sakte", "saktere" }))
+    { b.set ("attack", 350.0f); notes.add (u ("Langsom attack")); }
+    if (has ({ "rask", "raskere", "fast", "snappy", "direkte" }))
+    { b.set ("attack", 0.0f); notes.add (u ("Rask attack")); }
+    if (has ({ "myk", "mykere", "soft", "softer", "rolig", "calm", "gentle" }))
+    { b.add ("tone", -0.08f); b.add ("air", -0.1f); notes.add (u ("Mykere")); }
+    if (has ({ "hoyere", "hoyt", "louder", "loud", "sterkere" }))
+    { b.add ("volume", 3.0f); notes.add (u ("H\xc3\xb8yere volum")); }
+    if (has ({ "lavere", "svakere", "quieter", "stillere" }) && ! contains (w, { "mindre", "less" }))
+    { b.add ("volume", -3.0f); notes.add (u ("Lavere volum")); }
+
+    // chords only when asked for explicitly
+    struct ChordWord { const char* w; int c; };
+    for (auto cw : { ChordWord { "min7", hk::kMin7 }, ChordWord { "m7", hk::kMin7 }, ChordWord { "min9", hk::kMin9 },
+                     ChordWord { "m9", hk::kMin9 }, ChordWord { "min11", hk::kMin11 }, ChordWord { "maj7", hk::kMaj7 },
+                     ChordWord { "maj9", hk::kMaj9 }, ChordWord { "sus", hk::kSus }, ChordWord { "sus4", hk::kSus } })
+        if (w.contains (cw.w)) { b.set ("chord", (float) cw.c); notes.add (u ("Chord: ") + juce::String (cw.w).toUpperCase()); break; }
+}
+
+//==============================================================================
+// Changes the sound DESIGN itself (oscillators, layers, filter, envelopes), not just the controls.
+void designFromWords (const juce::StringArray& w, hk::SoundDef& d, juce::StringArray& notes, juce::StringArray& adjectives)
+{
+    int at = 0;
+    auto has = [&] (std::initializer_list<const char*> k) { return contains (w, k, &at); };
+    const bool isVa = d.va.level > 0.0f, isPiano = d.sampler.level > 0.0f;
+    auto& va = d.va;
+
+    if (has ({ "fet", "fetere", "feit", "feitere", "fat", "fatter", "tykk", "kraftig", "tung", "tyngre", "heavy", "massiv", "massive" }))
+    {
+        if (intensityBefore (w, at) < 0)
+        {
+            if (isVa) { va.unison = std::max (1, va.unison - 2); va.detune *= 0.7f; }
+            d.sampler.octave *= 0.5f; d.drive *= 0.6f;
+            notes.add (u ("Slankere (f\xc3\xa6rre stemmer og mindre drive)"));
+        }
+        else
+        {
+            if (isVa) { va.unison = std::min (7, va.unison + 2); va.detune += 8.0f; va.sub = std::max (va.sub, 0.3f); }
+            if (isPiano) d.sampler.octave = std::max (d.sampler.octave, 0.35f);
+            d.drive = std::min (1.0f, d.drive + 0.2f); d.glue = std::min (1.0f, d.glue + 0.15f);
+            notes.add (u ("Fetere (flere stemmer, mer sub/oktav og drive)")); adjectives.add ("Fat");
+        }
+    }
+    if (has ({ "bred", "bredere", "wide", "wider", "enorm", "huge" }) && intensityBefore (w, at) > 0)
+    {
+        if (isVa) { va.spread = 1.0f; va.detune += 8.0f; va.unison = std::max (va.unison, 5); }
+        if (d.keys.level > 0.0f) d.keys.spread = std::min (1.0f, d.keys.spread + 0.3f);
+        notes.add (u ("Bredere oscillatorer")); adjectives.add ("Wide");
+    }
+    if (has ({ "supersaw", "detune", "detuned", "trance" }))
+    {
+        if (isVa) { va.wave1 = hk::kSaw; va.unison = 7; va.detune = std::max (va.detune, 30.0f); va.spread = std::max (va.spread, 0.9f); }
+        else { va = hk::sounds()[(size_t) hk::kSupersawChords].va; va.level = 0.3f; va.decayMs = 1400.0f; va.sustain = 0.35f; d.gainDb -= 2.0f; }
+        notes.add (isVa ? u ("Supersaw (7 detunede sagtenner)") : u ("La til et supersaw-lag under"));
+        adjectives.add ("Supersaw");
+    }
+    if (has ({ "orgel", "organ" }) && d.organ.level <= 0.0f && ! negatedBefore (w, at))
+    {
+        d.organ.level = 0.35f; d.organ.bars = { 0.0f, 1.0f, 0.6f, 0.0f, 0.3f }; d.organ.decay = 1.5f; d.organ.click = 0.1f;
+        notes.add (u ("La til et orgel-lag")); adjectives.add ("Organ"); d.gainDb -= 2.0f;
+    }
+    if (has ({ "bjelle", "klokke", "bell", "bells", "glass", "glitter" }) && d.fm.level <= 0.0f && ! negatedBefore (w, at))
+    {
+        d.fm.level = 0.3f; d.fm.ratioA = 3.5f; d.fm.indexA = 1.2f; d.fm.susA = 0.25f; d.fm.decA = 1.2f;
+        d.fm.octB = 2; d.fm.ratioB = 1.41f; d.fm.indexB = 0.8f; d.fm.decB = 0.7f; d.fm.mixB = 0.4f; d.fm.decay = 3.0f;
+        notes.add (u ("La til et bjelle-lag (FM)")); adjectives.add ("Crystal"); d.gainDb -= 2.0f;
+    }
+    if (has ({ "oktav", "octave" }))
+    {
+        if (isPiano) d.sampler.octave = std::max (d.sampler.octave, 0.45f);
+        if (isVa) { va.semi2 = 12.0f; va.mix2 = std::max (va.mix2, 0.6f); }
+        notes.add (u ("Oktav-stablet"));
+    }
+    if (has ({ "sub", "808", "bunn", "bass" }) && ((at > 0 && isMoreLess (w[at - 1])) || w[at] != "bass"))
+    {
+        const float i = intensityBefore (w, at);
+        if (i < 0) { d.lowDb -= 3.0f; va.sub *= 0.5f; notes.add (u ("Mindre bunn")); }
+        else { d.lowDb += 2.5f; if (isVa) va.sub = std::min (1.0f, std::max (va.sub, 0.3f) + 0.2f); notes.add (u ("Mer bunn og sub")); }
+    }
+    if (has ({ "acid", "303", "squelch", "resonans", "resonant" }) && isVa)
+    { va.reso = 0.75f; va.envAmt = std::max (va.envAmt, 3.0f); va.fD = 200.0f; va.fS = 0.1f; notes.add (u ("Acid-filter med resonans")); adjectives.add ("Acid"); }
+    if (has ({ "kort", "kortere", "short", "pluck", "plucky", "stab", "staccato" }) && isVa)
+    { va.decayMs = std::min (va.decayMs > 0 ? va.decayMs : 1000.0f, 350.0f); va.sustain = 0.0f; va.fD = std::min (va.fD, 180.0f); va.fS = 0.0f;
+      va.envAmt = std::max (va.envAmt, 3.0f); notes.add (u ("Kort pluck-konvolutt")); }
+    if (has ({ "lys", "lysere", "bright", "skarp", "crisp", "aapen", "open" }))
+    { const float i = intensityBefore (w, at); if (isVa) va.cutoff = juce::jlimit (60.0f, 16000.0f, va.cutoff * std::pow (1.8f, i)); d.highDb += 2.0f * i; adjectives.add ("Bright"); }
+    if (has ({ "mork", "morkere", "dark", "dempet", "muffled" }))
+    { const float i = intensityBefore (w, at); if (isVa) va.cutoff = juce::jlimit (60.0f, 16000.0f, va.cutoff * std::pow (0.5f, i)); d.highDb -= 3.0f * i; adjectives.add ("Midnight"); }
+    if (has ({ "lofi", "vintage", "tape", "stovete", "dusty", "retro" }))
+    { d.tape = std::max (d.tape, 0.5f); d.highDb -= 2.0f; notes.add (u ("Tape og vintage-farge")); adjectives.add ("Dusty"); }
+    if (has ({ "analog", "drift", "ustabil" }) && isVa) { va.drift = 6.0f; va.motion = std::max (va.motion, 0.15f); adjectives.add ("Analog"); }
+    if (has ({ "sinus", "sine", "ren", "clean", "pure" }) && isVa) { va.wave1 = hk::kSine; va.mix2 = std::min (va.mix2, 0.2f); }
+    if (has ({ "square", "firkant", "hul", "hollow" }) && isVa) { va.wave1 = hk::kSquare; adjectives.add ("Hollow"); }
+    if (has ({ "mono", "legato", "glide", "portamento" })) { d.mono = true; d.glideMs = std::max (d.glideMs, 60.0f); notes.add (u ("Mono med glide")); }
+    if (has ({ "poly", "akkorder" }) && d.mono && ! has ({ "bass", "lead" })) { d.mono = false; d.glideMs = 0; notes.add (u ("Polyfon (spiller akkorder)")); }
+    if (has ({ "bevegelse", "movement", "levende", "evolving" }) && isVa) { va.motion = 0.35f; notes.add (u ("Langsom filterbevegelse")); }
+    if (has ({ "luftig", "luft", "airy", "fresh", "frisk" })) adjectives.add ("Airy");
+    if (has ({ "drommende", "dreamy", "ambient" })) adjectives.add ("Dream");
+    if (has ({ "pump", "pumpende", "pumping", "sidechain" })) adjectives.add ("Pumping");
+    if (has ({ "varm", "warm" })) adjectives.add ("Golden");
+    if (has ({ "myk", "soft", "rolig" })) adjectives.add ("Velvet");
+    if (has ({ "dyp", "deep" })) adjectives.add ("Deep");
+    if (has ({ "euforisk", "euphoric", "episk", "epic", "festival" })) adjectives.add ("Euphoric");
+    if (has ({ "sommer", "summer", "sunset", "solnedgang", "strand", "beach" })) adjectives.add ("Sunset");
+    if (has ({ "natt", "night" })) adjectives.add ("Night");
+    if (has ({ "90s", "90", "oldschool", "rave" })) adjectives.add ("90s");
+}
+
+//==============================================================================
+// Cross-breeding: every field is blended between parent A and B (t = share of B).
+struct Mix
+{
+    float t;
+    juce::Random& rnd;
+    float operator() (float a, float b) const { return a + (b - a) * t; }
+    int   operator() (int a, int b)     const { return rnd.nextFloat() < t ? b : a; }
+    bool  operator() (bool a, bool b)   const { return rnd.nextFloat() < t ? b : a; }
+};
+
+#define HK_BX(f) o.f = m (a.f, b.f);
+hk::SamplerDef blend (const hk::SamplerDef& a, const hk::SamplerDef& b, Mix& m) { auto o = a; HK_FIELDS_SAMPLER (HK_BX) return o; }
+hk::OrganDef   blend (const hk::OrganDef& a, const hk::OrganDef& b, Mix& m)
+{ auto o = a; HK_FIELDS_ORGAN (HK_BX) for (size_t i = 0; i < 5; ++i) o.bars[i] = m (a.bars[i], b.bars[i]); return o; }
+hk::FmDef      blend (const hk::FmDef& a, const hk::FmDef& b, Mix& m)     { auto o = a; HK_FIELDS_FM (HK_BX) return o; }
+hk::KeysDef    blend (const hk::KeysDef& a, const hk::KeysDef& b, Mix& m) { auto o = a; HK_FIELDS_KEYS (HK_BX) return o; }
+hk::VaDef      blend (const hk::VaDef& a, const hk::VaDef& b, Mix& m)
+{
+    auto o = a; HK_FIELDS_VA (HK_BX)
+    auto geo = [&] (float x, float y) { return (x > 0 && y > 0) ? std::exp (std::log (x) + (std::log (y) - std::log (x)) * m.t) : m (x, y); };
+    o.cutoff = geo (a.cutoff, b.cutoff); o.fD = geo (a.fD, b.fD); o.fR = geo (a.fR, b.fR); o.decayMs = geo (a.decayMs, b.decayMs);
+    return o;
+}
+hk::Params     blend (const hk::Params& a, const hk::Params& b, Mix& m)   { auto o = a; HK_FIELDS_PARAMS (HK_BX) return o; }
+#undef HK_BX
+
+template <class L> L crossLayer (const L& a, const L& b, Mix& m, juce::Random& rnd)
+{
+    if (a.level > 0 && b.level > 0) return blend (a, b, m);
+    if (a.level > 0) { L o = a; o.level *= 1.0f - 0.45f * m.t; return o; }
+    if (b.level > 0 && rnd.nextFloat() < m.t + 0.2f) { L o = b; o.level *= 0.35f + 0.5f * m.t; return o; }
+    L o = a; o.level = 0.0f; return o;
+}
+
+hk::SoundDef crossBreed (const hk::SoundDef& A, const hk::SoundDef& B, float t, juce::Random& rnd)
+{
+    Mix m { t, rnd };
+    hk::SoundDef d = A;
+    d.sampler = crossLayer (A.sampler, B.sampler, m, rnd);
+    d.organ   = crossLayer (A.organ, B.organ, m, rnd);
+    d.fm      = crossLayer (A.fm, B.fm, m, rnd);
+    d.keys    = crossLayer (A.keys, B.keys, m, rnd);
+    d.va      = crossLayer (A.va, B.va, m, rnd);
+    if (d.sampler.level > 0)
+    {
+        d.fallback = A.sampler.level > 0 ? A.fallback : B.fallback;
+        d.fallback.level = d.sampler.level;
+    }
+    else d.fallback.level = 0;
+    d.sampler.user = false;
+    d.mono = A.mono;
+    d.glideMs = A.mono ? m (A.glideMs, B.glideMs) : 0.0f;
+    d.lowCutHz = m (A.lowCutHz, B.lowCutHz); d.lowDb = m (A.lowDb, B.lowDb); d.highDb = m (A.highDb, B.highDb);
+    d.drive = m (A.drive, B.drive); d.glue = m (A.glue, B.glue); d.tape = m (A.tape, B.tape); d.gainDb = m (A.gainDb, B.gainDb);
+    d.preset = blend (A.preset, B.preset, m);
+    d.preset.chord = hk::kChordOff;
+    d.preset.smpMode = 0;
+    return d;
+}
+
+//==============================================================================
+float gauss (juce::Random& r) { return (r.nextFloat() + r.nextFloat() + r.nextFloat() - 1.5f) * 1.4f; }
+
+void mutate (hk::SoundDef& d, int kind, float m, juce::Random& r)
+{
+    auto& va = d.va;
+    const bool chordy = kind != hk::kCatBass && kind != hk::kCatLeads;
+    if (va.level > 0)
+    {
+        va.detune *= std::exp (gauss (r) * m * 1.5f);
+        va.cutoff *= std::exp2 (gauss (r) * m * 2.0f);
+        if (kind == hk::kCatBass) va.cutoff = std::min (va.cutoff, 3500.0f);
+        va.envAmt += gauss (r) * m * 2.0f;
+        va.fD *= std::exp (gauss (r) * m * 1.5f);
+        if (va.decayMs > 0) va.decayMs *= std::exp (gauss (r) * m);
+        va.spread = juce::jlimit (0.0f, 1.0f, va.spread + gauss (r) * m);
+        va.sub = juce::jlimit (0.0f, 1.0f, va.sub + gauss (r) * m * 0.5f);
+        va.motion = juce::jlimit (0.0f, 0.6f, va.motion + std::abs (gauss (r)) * m * 0.3f);
+        va.drift = juce::jlimit (0.0f, 10.0f, va.drift + gauss (r) * m * 4.0f);
+        va.reso = juce::jlimit (0.0f, va.reso > 0.6f ? 0.9f : 0.7f, va.reso + gauss (r) * m * 0.4f);
+        if (r.nextFloat() < m) va.unison = juce::jlimit (1, 7, va.unison + (r.nextFloat() < 0.65f ? 2 : -1));
+        if (r.nextFloat() < m * 0.7f)
+        {
+            // a second oscillator at a musical interval
+            static const float chordSafe[] = { 0.0f, 12.0f, -12.0f };
+            static const float any[] = { 0.0f, 12.0f, -12.0f, 7.0f, 19.0f };
+            va.semi2 = chordy ? chordSafe[r.nextInt (3)] : any[r.nextInt (5)];
+            va.fine2 = gauss (r) * 8.0f;
+            va.mix2 = juce::jlimit (0.2f, 0.8f, va.mix2 + 0.3f);
+            if (r.nextFloat() < 0.4f) va.wave2 = r.nextInt (4);
+        }
+    }
+    if (d.fm.level > 0)
+    {
+        static const float ratiosA[] = { 1.0f, 1.0f, 2.0f, 3.0f, 0.5f };
+        static const float ratiosB[] = { 7.0f, 9.0f, 14.0f, 17.0f };
+        if (r.nextFloat() < m * 0.8f) d.fm.ratioA = ratiosA[r.nextInt (5)];
+        if (r.nextFloat() < m * 0.6f) d.fm.ratioB = ratiosB[r.nextInt (4)];
+        d.fm.indexA *= std::exp (gauss (r) * m);
+        d.fm.indexB *= std::exp (gauss (r) * m);
+        d.fm.decay *= std::exp (gauss (r) * m);
+    }
+    if (d.keys.level > 0)
+    {
+        d.keys.tilt = juce::jlimit (0.0f, 1.0f, d.keys.tilt + gauss (r) * m * 0.3f);
+        d.keys.bright = juce::jlimit (0.0f, 1.0f, d.keys.bright + gauss (r) * m * 0.3f);
+        d.keys.tau *= std::exp (gauss (r) * m);
+        d.keys.detune *= std::exp (gauss (r) * m);
+        d.keys.spread = juce::jlimit (0.0f, 1.0f, d.keys.spread + gauss (r) * m * 0.5f);
+    }
+    if (d.sampler.level > 0)
+    {
+        d.sampler.octave = juce::jlimit (0.0f, 0.6f, d.sampler.octave + gauss (r) * m * 0.4f);
+        d.sampler.dynamics += gauss (r) * m * 5.0f;
+    }
+    if (d.organ.level > 0)
+    {
+        for (auto& b : d.organ.bars) b = juce::jlimit (0.0f, 1.0f, b + gauss (r) * m * 0.4f);
+        d.organ.click = juce::jlimit (0.0f, 1.0f, d.organ.click + gauss (r) * m * 0.3f);
+    }
+    d.lowDb += gauss (r) * m * 4.0f;
+    d.highDb += gauss (r) * m * 4.0f;
+    d.drive = juce::jlimit (0.0f, 0.7f, d.drive + gauss (r) * m * 0.4f);
+    d.glue = juce::jlimit (0.0f, 0.9f, d.glue + gauss (r) * m * 0.3f);
+    if (r.nextFloat() < m) d.tape = juce::jlimit (0.0f, 0.7f, d.tape + std::abs (gauss (r)) * 0.25f);
+
+    auto& p = d.preset;
+    p.air += gauss (r) * m * 0.5f;
+    p.tone += gauss (r) * m * 0.3f;
+    p.width += gauss (r) * m * 0.4f;
+    p.reverbMix += gauss (r) * m * 0.2f;
+    p.reverbSize += gauss (r) * m * 0.4f;
+    p.chorusMix += gauss (r) * m * 0.2f;
+    if (r.nextFloat() < m * 0.5f) p.chorusOn = ! p.chorusOn;
+    if (r.nextFloat() < m * 0.4f && kind != hk::kCatBass) { p.delayOn = true; p.delayTime = 1 + r.nextInt (3); p.delayMix = 0.12f + 0.1f * r.nextFloat(); }
+    clampParams (p);
+}
+
+// one extra ingredient that the parents did not have
+void spice (hk::SoundDef& d, int kind, juce::Random& r, juce::StringArray& notes)
+{
+    const bool pianoLike = kind == hk::kCatRealPiano || kind == hk::kCatHousePiano || kind == hk::kCatDeepKeys || kind == hk::kCatRhodes;
+    std::vector<int> options;
+    if (d.fm.level <= 0 && kind != hk::kCatBass) options.push_back (0);                  // bell sparkle
+    if (d.va.level <= 0 && pianoLike) options.push_back (1);                             // soft pad underneath
+    if (d.organ.level <= 0 && (pianoLike || kind == hk::kCatSynths || kind == hk::kCatBass)) options.push_back (2);
+    if (d.sampler.level > 0) options.push_back (3);                                      // octave piano
+    if (d.va.level > 0) options.push_back (4);                                           // sub
+    if (d.sampler.level <= 0 && (kind == hk::kCatSupersaw || kind == hk::kCatPlucks)) options.push_back (5);  // piano under the saws
+    if (d.va.level > 0 && kind != hk::kCatBass) options.push_back (6);                   // slow filter movement
+    if (options.empty()) return;
+
+    switch (options[(size_t) r.nextInt ((int) options.size())])
+    {
+        case 0:
+            d.fm.level = 0.12f + 0.12f * r.nextFloat(); d.fm.ratioA = 3.5f; d.fm.indexA = 1.0f; d.fm.susA = 0.2f; d.fm.decA = 1.0f;
+            d.fm.octB = 2; d.fm.ratioB = 1.41f; d.fm.indexB = 0.7f; d.fm.decB = 0.6f; d.fm.mixB = 0.4f; d.fm.decay = 2.5f;
+            notes.add (u ("Ekstra: et svakt bjelle-lag p\xc3\xa5 toppen")); break;
+        case 1:
+            d.va = hk::sounds()[(size_t) hk::kWarmPad].va;
+            d.va.level = 0.16f + 0.1f * r.nextFloat(); d.va.decayMs = 2500.0f; d.va.sustain = 0.4f;
+            notes.add (u ("Ekstra: en myk pad under")); break;
+        case 2:
+            d.organ.level = 0.15f + 0.12f * r.nextFloat(); d.organ.bars = { 0.0f, 1.0f, 0.5f, 0.0f, 0.25f }; d.organ.decay = 1.2f; d.organ.click = 0.15f;
+            notes.add (u ("Ekstra: litt orgel i kroppen")); break;
+        case 3:
+            d.sampler.octave = std::max (d.sampler.octave, 0.3f + 0.2f * r.nextFloat());
+            notes.add (u ("Ekstra: piano en oktav opp")); break;
+        case 4:
+            d.va.sub = std::max (d.va.sub, 0.35f + 0.25f * r.nextFloat());
+            notes.add (u ("Ekstra: sub-oscillator for mer bunn")); break;
+        case 5:
+            d.sampler = hk::sounds()[(size_t) hk::kFreshHouse].sampler; d.sampler.level = 0.3f + 0.15f * r.nextFloat(); d.sampler.octave = 0.0f;
+            d.fallback = hk::sounds()[(size_t) hk::kFreshHouse].fallback; d.fallback.level = d.sampler.level;
+            notes.add (u ("Ekstra: ekte piano under saw-ene")); break;
+        default:
+            d.va.motion = std::max (d.va.motion, 0.3f);
+            notes.add (u ("Ekstra: langsom filterbevegelse")); break;
+    }
+}
+
+//==============================================================================
+juce::String makeNameOnce (int kind, const juce::StringArray& adjectives, juce::Random& r);
+juce::String makeName (int kind, const juce::StringArray& adjectives, juce::Random& r)
+{
+    for (int attempt = 0; attempt < 8; ++attempt)
+    {
+        auto n = makeNameOnce (kind, attempt < 4 ? adjectives : juce::StringArray(), r);
+        bool taken = false;
+        for (auto& d : hk::sounds()) taken |= n.equalsIgnoreCase (u (d.name));
+        if (! taken) return n;
+    }
+    return "Neon " + makeNameOnce (kind, {}, r);
+}
+
+juce::String makeNameOnce (int kind, const juce::StringArray& adjectives, juce::Random& r)
+{
+    static const char* general[] = { "Midnight", "Velvet", "Neon", "Golden", "Sunset", "Hazy", "Ibiza", "Warehouse", "Afterhours",
+                                     "Electric", "Liquid", "Cosmic", "Silk", "Summer", "Moonlit", "Ocean", "Late Night", "Purple",
+                                     "Disco", "Sunrise", "Rooftop", "Paradise", "Soul", "Chicago", "Club", "Dawn", "Tropical", "Lunar" };
+    static const std::map<int, std::vector<const char*>> nouns = {
+        { hk::kCatRealPiano,  { "Grand", "Piano", "Keys" } },
+        { hk::kCatHousePiano, { "Piano", "House Piano", "Keys" } },
+        { hk::kCatDeepKeys,   { "Keys", "Stab", "Organ Keys" } },
+        { hk::kCatRhodes,     { "Rhodes", "EP", "Tines" } },
+        { hk::kCatSupersaw,   { "Chords", "Saws", "Supersaw", "Stab" } },
+        { hk::kCatSynths,     { "Poly", "Synth", "Chords" } },
+        { hk::kCatLeads,      { "Lead", "Saw Lead", "Topline" } },
+        { hk::kCatPads,       { "Pad", "Haze", "Atmosphere", "Clouds" } },
+        { hk::kCatBass,       { "Bass", "Sub", "Groove Bass" } },
+        { hk::kCatPlucks,     { "Pluck", "Plucks", "Arp" } } };
+    juce::String first;
+    if (adjectives.size() > 0) first = adjectives[r.nextInt (adjectives.size())];
+    else first = general[r.nextInt ((int) std::size (general))];
+    juce::String second;
+    if (r.nextFloat() < 0.35f)
+    {
+        juce::String g = general[r.nextInt ((int) std::size (general))];
+        if (g != first) second = g;
+    }
+    const auto it = nouns.find (kind);
+    const juce::String noun = it != nouns.end() ? it->second[(size_t) r.nextInt ((int) it->second.size())] : "Sound";
+    return (first + " " + (second.isNotEmpty() ? second + " " : juce::String()) + noun).trim();
+}
+
+// "Fetere: flere stemmer", "La til et bjelle-lag (FM)" -> joined inside a sentence, first letter lower-case
+juce::String joinNotes (const juce::StringArray& notes)
+{
+    juce::StringArray out;
+    for (auto n : notes) out.add (n.substring (0, 1).toLowerCase() + n.substring (1));
+    return out.joinIntoString (", ");
+}
+
+juce::String pick (juce::Random& r, std::initializer_list<const char*> options)
+{
+    const int i = r.nextInt ((int) options.size());
+    return u (*(options.begin() + i));
+}
+
+//==============================================================================
+int chooseWeighted (const std::vector<std::pair<int, float>>& c, juce::Random& r, int exclude = -1)
+{
+    float total = 0;
+    for (auto& [i, w] : c) if (i != exclude) total += w;
+    if (total <= 0) return -1;
+    float x = r.nextFloat() * total;
+    for (auto& [i, w] : c)
+    {
+        if (i == exclude) continue;
+        if ((x -= w) <= 0) return i;
+    }
+    for (auto it = c.rbegin(); it != c.rend(); ++it) if (it->first != exclude) return it->first;
+    return -1;
+}
+
+float tagScore (int sound, const juce::StringArray& w)
+{
+    float s = 0;
+    if (auto it = soundTags().find (sound); it != soundTags().end())
+        for (auto* k : it->second) if (contains (w, { k })) s += 1.0f;
+    for (auto& nw : words (u (hk::sounds()[(size_t) sound].name))) if (nw.length() >= 3 && contains (w, { nw.toRawUTF8() })) s += 0.5f;
+    return s;
+}
+
+bool usable (int i) { return i != hk::kDroppedSample && i != hk::kAiSound && ! hk::sounds()[(size_t) i].sampler.user; }
+
+// the categories mentioned ("stab" can be keys or supersaw); "mer bass" is an edit, not a noun
+std::vector<int> mentionedKinds (const juce::StringArray& w)
+{
+    std::vector<int> kinds;
+    for (auto& [cat, keys] : categoryNouns())
+        for (int i = 0; i < w.size(); ++i)
+        {
+            bool hit = false;
+            for (auto* k : keys) if (matches (w[i], k)) hit = true;
+            if (hit && ! (i > 0 && isMoreLess (w[i - 1]))) { kinds.push_back (cat); break; }
+        }
+    // "piano" alone = house piano, unless it should sound real
+    const bool real = contains (w, { "ekte", "real", "realistisk", "konsert", "concert", "klassisk", "classical", "akustisk", "acoustic", "flygel", "grand" });
+    if (std::find (kinds.begin(), kinds.end(), hk::kCatRealPiano) != kinds.end() && std::find (kinds.begin(), kinds.end(), hk::kCatHousePiano) != kinds.end())
+        kinds.erase (std::find (kinds.begin(), kinds.end(), real ? hk::kCatHousePiano : hk::kCatRealPiano));
+    return kinds;
+}
+
+const std::map<int, std::vector<int>>& friends()
+{
+    static const std::map<int, std::vector<int>> f = {
+        { hk::kCatRealPiano,  { hk::kCatHousePiano } },
+        { hk::kCatHousePiano, { hk::kCatRealPiano, hk::kCatDeepKeys, hk::kCatRhodes } },
+        { hk::kCatDeepKeys,   { hk::kCatRhodes, hk::kCatHousePiano } },
+        { hk::kCatRhodes,     { hk::kCatDeepKeys, hk::kCatHousePiano } },
+        { hk::kCatSupersaw,   { hk::kCatSynths, hk::kCatPlucks, hk::kCatLeads } },
+        { hk::kCatSynths,     { hk::kCatSupersaw, hk::kCatPads } },
+        { hk::kCatLeads,      { hk::kCatSupersaw } },
+        { hk::kCatPads,       { hk::kCatSynths } },
+        { hk::kCatBass,       {} },
+        { hk::kCatPlucks,     { hk::kCatSupersaw, hk::kCatSynths } } };
+    return f;
+}
+
+Result generate (const juce::StringArray& w, const juce::String& request, juce::uint32 seed, int forcedParent)
+{
+    juce::Random r ((juce::int64) seed);
+    Result res;
+    res.request = request;
+
+    //---- 1. what kind of sound
+    int kind = -1;
+    if (forcedParent >= 0) kind = hk::sounds()[(size_t) forcedParent].category;
+    else
+    {
+        auto kinds = mentionedKinds (w);
+        if (kinds.empty())
+        {
+            int best = -1; float bestScore = 1.5f;
+            for (int i = 0; i < hk::kNumSounds; ++i)
+                if (usable (i)) if (float s = tagScore (i, w); s > bestScore) { bestScore = s; best = i; }
+            if (best >= 0) kind = hk::sounds()[(size_t) best].category;
+            else
+            {
+                static const int gen[] = { hk::kCatHousePiano, hk::kCatHousePiano, hk::kCatDeepKeys, hk::kCatRhodes, hk::kCatSupersaw,
+                                           hk::kCatSynths, hk::kCatLeads, hk::kCatPads, hk::kCatBass, hk::kCatPlucks };
+                kind = gen[r.nextInt ((int) std::size (gen))];
+            }
+        }
+        else kind = kinds[(size_t) r.nextInt ((int) kinds.size())];
+    }
+    res.kind = kind;
+
+    //---- 2. two parents: tags decide who is likely, a friend category sometimes joins in
+    std::vector<std::pair<int, float>> pool, friendPool;
+    for (int i = 0; i < hk::kNumSounds; ++i)
+    {
+        if (! usable (i)) continue;
+        const int c = hk::sounds()[(size_t) i].category;
+        const float wgt = 0.5f + 2.0f * tagScore (i, w);
+        if (c == kind) pool.push_back ({ i, wgt });
+        else if (auto f = friends().find (kind); f != friends().end() && std::find (f->second.begin(), f->second.end(), c) != f->second.end())
+        {
+            // mono sounds (leads, bass) only borrow from pure synth sounds
+            const auto& sd = hk::sounds()[(size_t) i];
+            const bool pureSynth = sd.sampler.level <= 0 && sd.organ.level <= 0 && sd.fm.level <= 0 && sd.keys.level <= 0;
+            if (kind != hk::kCatLeads || pureSynth) friendPool.push_back ({ i, wgt });
+        }
+    }
+    int A = forcedParent >= 0 ? forcedParent : chooseWeighted (pool, r);
+    if (A < 0) A = hk::kDefaultSound;
+    int B = -1;
+    if (! friendPool.empty() && (r.nextFloat() < 0.3f || pool.size() < 2)) B = chooseWeighted (friendPool, r);
+    if (B < 0) B = chooseWeighted (pool, r, A);
+    if (B < 0) B = A;
+    res.parentA = A; res.parentB = B; res.levelSound = A;
+
+    const bool experimental = contains (w, { "eksperimentell", "experimental", "rar", "weird", "crazy", "gal", "unik", "unique", "annerledes", "different", "sprett", "vill", "wild" });
+    const bool simple = contains (w, { "enkel", "simple", "klassisk", "classic", "ren", "clean", "naturlig", "natural" });
+    const float mutation = experimental ? 0.4f : (simple ? 0.08f : 0.18f);
+
+    //---- 3. breed, mutate, spice
+    const auto& pa = hk::sounds()[(size_t) A];
+    const auto& pb = hk::sounds()[(size_t) B];
+    juce::StringArray notes;
+    hk::SoundDef d = crossBreed (pa, pb, A == B ? 0.0f : 0.2f + 0.3f * r.nextFloat(), r);
+    mutate (d, kind, mutation, r);
+    if (r.nextFloat() < (experimental ? 0.7f : (simple ? 0.0f : 0.35f))) spice (d, kind, r, notes);
+
+    //---- 4. shape with the words
+    juce::StringArray adjectives;
+    designFromWords (w, d, notes, adjectives);
+    std::map<juce::String, float> m;
+    Builder b { d.preset, m };
+    applyControls (w, b, notes);
+    writeParams (m, d.preset);
+    clampParams (d.preset);
+    codec::sanitise (d);
+    d.name = ""; d.tag = ""; d.category = kind;
+    res.def = d;
+
+    adjectives.removeDuplicates (true);
+    res.name = makeName (kind, adjectives, r);
+    res.chips = describe (d);
+    res.hasSound = true;
+
+    //---- 5. what the AI says
+    juce::String s;
+    s << pick (r, { "Her er **%N** \xe2\x80\x93 en helt ny %K.", "Ferdig! **%N** er en ny %K designet fra bunnen.",
+                    "Jeg har bygget **%N**, en ny %K.", "Sjekk **%N** \xe2\x80\x93 en fersk %K." });
+    if (A != B) s << " " << u ("Den er en krysning av ") << u (pa.name) << " og " << u (pb.name);
+    else s << " " << u ("Den bygger p\xc3\xa5 ") << u (pa.name);
+    s << (notes.isEmpty() ? juce::String (".") : ", " + joinNotes (notes) + ".");
+    s << "\n" << pick (r, { "Si ifra om den skal bli fetere, m\xc3\xb8rkere eller luftigere.",
+                            "Vil du ha en annen versjon? Trykk \xc2\xabNy variant\xc2\xbb.",
+                            "Liker du den? Trykk \xc2\xabLagre\xc2\xbb, s\xc3\xa5 ligger den under Mine lyder.",
+                            "Skriv f.eks. \xc2\xabmer pump\xc2\xbb eller \xc2\xabkortere\xc2\xbb for \xc3\xa5 justere den." });
+    res.reply = s.replace ("%N", res.name).replace ("%K", u (kindName (kind)));
+    return res;
+}
+
+// "kall den Sommer Keys" -> "Sommer Keys"
+juce::String renameTarget (const juce::String& text)
+{
+    const auto lower = text.toLowerCase();
+    for (auto* key : { "kall den ", "kall lyden ", "navnet ", "navn: ", "navn ", "name it ", "call it ", "rename to ", "gi den navnet " })
+    {
+        const int i = lower.indexOf (u (key));
+        if (i >= 0 && (i == 0 || lower.startsWith ("gi ") || lower.startsWith ("kan du")))
+        {
+            auto n = text.substring (i + (int) std::strlen (key)).trim();
+            n = n.removeCharacters (u ("\"\xc2\xab\xc2\xbb")).trim();
+            while (n.endsWithChar ('.') || n.endsWithChar ('!')) n = n.dropLastCharacters (1);
+            return n.substring (0, 40).trim();
+        }
+    }
+    return {};
+}
 } // namespace
 
 //==============================================================================
@@ -178,352 +836,261 @@ bool clampParam (const juce::String& id, float& v)
     return true;
 }
 
-//==============================================================================
-static void writeParams (const std::map<juce::String, float>& m, hk::Params& p)
+juce::StringArray describe (const hk::SoundDef& d)
 {
-    for (auto& [id, v] : m)
+    juce::StringArray c;
+    if (d.sampler.level > 0) c.add (u ("Ekte piano"));
+    if (d.sampler.level > 0 && d.sampler.octave > 0.15f) c.add (u ("Oktav-lag"));
+    if (d.keys.level > 0) c.add (u ("House-keys"));
+    if (d.organ.level > 0) c.add (u ("Orgel"));
+    if (d.fm.level > 0) c.add (d.fm.ratioA <= 1.5f && d.fm.ratioB > 5.0f ? u ("E-piano (FM)") : u ("Bjelle (FM)"));
+    if (d.va.level > 0)
     {
-        if (id == "tone") p.tone = v;              else if (id == "air") p.air = v;
-        else if (id == "attack") p.attackMs = v;   else if (id == "decay") p.decay = v;
-        else if (id == "release") p.releaseS = v;  else if (id == "width") p.width = v;
-        else if (id == "volume") p.volumeDb = v;   else if (id == "chord") p.chord = (int) v;
-        else if (id == "filterOn") p.filterOn = v > 0.5f; else if (id == "cutoff") p.cutoffHz = v; else if (id == "reso") p.resonance = v;
-        else if (id == "satOn") p.satOn = v > 0.5f;       else if (id == "satDrive") p.satDrive = v;
-        else if (id == "chorusOn") p.chorusOn = v > 0.5f; else if (id == "chorusMix") p.chorusMix = v;
-        else if (id == "delayOn") p.delayOn = v > 0.5f;   else if (id == "delayTime") p.delayTime = (int) v;
-        else if (id == "delayFb") p.delayFeedback = v;    else if (id == "delayMix") p.delayMix = v;
-        else if (id == "reverbOn") p.reverbOn = v > 0.5f; else if (id == "reverbSize") p.reverbSize = v; else if (id == "reverbMix") p.reverbMix = v;
-        else if (id == "pumpOn") p.pumpOn = v > 0.5f;     else if (id == "pumpRate") p.pumpRate = (int) v; else if (id == "pumpDepth") p.pumpDepth = v;
-        else if (id == "vibOn") p.vibOn = v > 0.5f;       else if (id == "vibRate") p.vibRate = v; else if (id == "vibDepth") p.vibDepth = v;
+        static const char* waves[] = { "Saw", "Square", "Triangle", "Sinus" };
+        if (d.va.wave1 == hk::kSaw && d.va.unison >= 5) c.add (u ("Supersaw \xc3\x97") + juce::String (d.va.unison));
+        else c.add (u (waves[juce::jlimit (0, 3, d.va.wave1)]) + (d.va.unison > 1 ? u (" \xc3\x97") + juce::String (d.va.unison) : juce::String()));
+        if (d.va.sub > 0.2f) c.add ("Sub");
+        if (d.va.reso > 0.6f) c.add (u ("Acid-filter"));
+        if (d.va.motion > 0.2f) c.add (u ("Bevegelse"));
+        if (d.va.noise > 0.05f) c.add (u ("St\xc3\xb8y"));
     }
+    if (d.mono) c.add (d.glideMs > 0 ? u ("Mono + glide") : u ("Mono"));
+    if (d.tape > 0.3f) c.add ("Tape");
+    if (d.drive > 0.35f || (d.preset.satOn && d.preset.satDrive > 0.2f)) c.add ("Drive");
+    const auto& p = d.preset;
+    if (p.filterOn) c.add ("Filter");
+    if (p.chorusOn) c.add ("Chorus");
+    if (p.vibOn) c.add ("Vibrato");
+    if (p.delayOn) c.add ("Delay");
+    if (p.reverbOn) c.add ("Reverb");
+    if (p.pumpOn) c.add ("Pump");
+    if (p.air > 0.6f) c.add ("Air");
+    return c;
 }
 
-// Changes the sound DESIGN itself (oscillators, layers, filter, envelopes), not just the controls.
-static void designFromWords (const juce::StringArray& w, hk::SoundDef& d, juce::StringArray& notes, juce::StringArray& nameWords)
+Result respond (const juce::String& text, const Context* current, juce::uint32 seed)
 {
-    auto has = [&] (std::initializer_list<const char*> k) { return contains (w, k); };
-    const bool isVa = d.va.level > 0.0f, isPiano = d.sampler.level > 0.0f;
-    auto& va = d.va;
-
-    if (has ({ "fet", "feit", "fat", "tykk", "kraftig", "tung", "heavy", "massiv", "massive" }))
-    {
-        if (isVa) { va.unison = std::min (7, va.unison + 2); va.detune += 8.0f; va.sub = std::max (va.sub, 0.3f); }
-        if (isPiano) d.sampler.octave = std::max (d.sampler.octave, 0.35f);
-        d.drive = std::min (1.0f, d.drive + 0.2f); d.glue = std::min (1.0f, d.glue + 0.15f);
-        notes.add (u ("Fetere: flere stemmer, mer sub/oktav og drive")); nameWords.add ("Fet");
-    }
-    if (has ({ "bred", "bredere", "wide", "wider", "stor", "big", "enorm", "huge" }))
-    {
-        if (isVa) { va.spread = 1.0f; va.detune += 8.0f; va.unison = std::max (va.unison, 5); }
-        if (d.keys.level > 0.0f) d.keys.spread = std::min (1.0f, d.keys.spread + 0.3f);
-        notes.add (u ("Bredere oscillatorer")); nameWords.add ("Bred");
-    }
-    if (has ({ "supersaw", "detune", "detuned", "trance" }))
-    {
-        if (isVa) { va.wave1 = hk::kSaw; va.unison = 7; va.detune = std::max (va.detune, 30.0f); va.spread = std::max (va.spread, 0.9f); }
-        else { va = hk::sounds()[(size_t) hk::kSupersawChords].va; va.level = 0.3f; va.decayMs = 1400.0f; va.sustain = 0.35f; }
-        notes.add (isVa ? u ("Supersaw: 7 detunede sagtenner") : u ("La til et supersaw-lag under")); d.gainDb -= 2.0f;
-        nameWords.add ("Supersaw");
-    }
-    if (has ({ "orgel", "organ" }) && d.organ.level <= 0.0f)
-    {
-        d.organ.level = 0.35f; d.organ.bars = { 0.0f, 1.0f, 0.6f, 0.0f, 0.3f }; d.organ.decay = 1.5f; d.organ.click = 0.1f;
-        notes.add (u ("La til et orgel-lag")); nameWords.add ("Orgel"); d.gainDb -= 2.0f;
-    }
-    if (has ({ "bjelle", "klokke", "bell", "bells", "glass", "glitter" }) && d.fm.level <= 0.0f)
-    {
-        d.fm.level = 0.3f; d.fm.ratioA = 3.5f; d.fm.indexA = 1.2f; d.fm.susA = 0.25f; d.fm.decA = 1.2f;
-        d.fm.octB = 2; d.fm.ratioB = 1.41f; d.fm.indexB = 0.8f; d.fm.decB = 0.7f; d.fm.mixB = 0.4f; d.fm.decay = 3.0f;
-        notes.add (u ("La til et bjelle-lag (FM)")); nameWords.add ("Bell"); d.gainDb -= 2.0f;
-    }
-    if (has ({ "oktav", "octave" }))
-    {
-        if (isPiano) d.sampler.octave = std::max (d.sampler.octave, 0.45f);
-        if (isVa) { va.semi2 = 12.0f; va.mix2 = std::max (va.mix2, 0.6f); }
-        notes.add (u ("Oktav-stablet")); nameWords.add ("Oktav");
-    }
-    if (has ({ "sub", "808" }) && isVa) { va.sub = std::max (va.sub, 0.55f); notes.add (u ("Mer sub")); }
-    if (has ({ "acid", "303", "squelch", "resonans", "resonant" }) && isVa)
-    { va.reso = 0.75f; va.envAmt = std::max (va.envAmt, 3.0f); va.fD = 200.0f; va.fS = 0.1f; notes.add (u ("Acid-filter med resonans")); nameWords.add ("Acid"); }
-    if (has ({ "kort", "short", "pluck", "plucky", "stab", "staccato" }) && isVa)
-    { va.decayMs = 350.0f; va.sustain = 0.0f; va.fD = 180.0f; va.fS = 0.0f; va.envAmt = std::max (va.envAmt, 3.0f); notes.add (u ("Kort pluck-konvolutt")); }
-    if (has ({ "lys", "bright", "skarp", "crisp", "aapen", "open" }))
-    { if (isVa) va.cutoff = std::min (16000.0f, va.cutoff * 1.8f); d.highDb += 2.0f; nameWords.add ("Lys"); }
-    if (has ({ "mork", "dark", "dempet", "muffled" }))
-    { if (isVa) va.cutoff *= 0.5f; d.highDb -= 3.0f; nameWords.add (u ("M\xc3\xb8rk")); }
-    if (has ({ "lofi", "vintage", "tape", "stovete", "dusty", "retro" }))
-    { d.tape = std::max (d.tape, 0.5f); d.highDb -= 2.0f; notes.add (u ("Tape og vintage-farge")); nameWords.add ("Lo-fi"); }
-    if (has ({ "analog", "drift", "ustabil" }) && isVa) { va.drift = 6.0f; va.motion = std::max (va.motion, 0.15f); nameWords.add ("Analog"); }
-    if (has ({ "sinus", "sine", "ren", "clean", "pure" }) && isVa) { va.wave1 = hk::kSine; va.mix2 = std::min (va.mix2, 0.2f); }
-    if (has ({ "square", "firkant", "hul", "hollow" }) && isVa) { va.wave1 = hk::kSquare; nameWords.add ("Hul"); }
-    if (has ({ "mono", "legato", "glide", "portamento" })) { d.mono = true; d.glideMs = std::max (d.glideMs, 60.0f); notes.add (u ("Mono med glide")); }
-    if (has ({ "bevegelse", "movement", "levende", "evolving" }) && isVa) { va.motion = 0.35f; notes.add (u ("Langsom filterbevegelse")); }
-    if (has ({ "luftig", "luft", "airy", "fresh", "frisk" })) nameWords.add ("Luftig");
-    if (has ({ "drommende", "dreamy", "ambient" })) nameWords.add (u ("Dr\xc3\xb8mmende"));
-    if (has ({ "pump", "pumpende", "pumping", "sidechain" })) nameWords.add ("Pumpende");
-}
-
-//==============================================================================
-Result interpretLocal (const juce::String& text, int currentSound)
-{
-    Result r;
+    Result res;
     const auto w = words (text);
-    if (w.isEmpty()) { r.error = "Skriv hva slags lyd du vil ha"; return r; }
+    juce::Random r ((juce::int64) seed);
 
-    //---- 1. pick the base sound
-    int best = -1;
-    float bestScore = 0.0f;
-    for (int i = 0; i < hk::kNumSounds; ++i)
+    if (w.isEmpty()) { res.reply = u ("Skriv hva slags lyd du vil ha, s\xc3\xa5 lager jeg den."); return res; }
+
+    // small talk
+    const bool greeting = w.size() <= 3 && contains (w, { "hei", "hallo", "hello", "hi", "heisann", "yo", "hey" });
+    if (greeting && mentionedKinds (w).empty())
     {
-        const auto& d = hk::sounds()[(size_t) i];
-        if (d.sampler.user) continue;
-        float score = 0.0f;
-        if (auto it = categoryNouns().find (d.category); it != categoryNouns().end())
-            for (auto* k : it->second) if (contains (w, { k })) { score += 3.0f; break; }
-        if (auto it = soundTags().find (i); it != soundTags().end())
-            for (auto* k : it->second) if (contains (w, { k })) score += 2.0f;
-        for (auto& nw : words (u (d.name))) if (nw.length() >= 3 && contains (w, { nw.toRawUTF8() })) score += 0.5f;
-        // the most typical sound of each kind wins when the description is general ("piano", "bass")
-        static const std::map<int, float> prior = { { hk::kFreshHouse, 0.6f }, { hk::kConcertGrand, 0.3f },
-            { hk::kDeepHouseKeys, 0.3f }, { hk::kWarmRhodes, 0.3f }, { hk::kSupersawChords, 0.3f }, { hk::kPolySynth, 0.3f },
-            { hk::kSawLead, 0.3f }, { hk::kWarmPad, 0.3f }, { hk::kHouseBass, 0.3f }, { hk::kHousePluck, 0.3f } };
-        if (auto it = prior.find (i); it != prior.end() && score > 0.0f) score += it->second;
-        score -= 0.001f * (float) i;   // stable tie-break
-        if (score > bestScore) { bestScore = score; best = i; }
+        res.reply = u ("Hei! Beskriv en lyd, f.eks. \xc2\xab""fet deep house piano med pump\xc2\xbb, s\xc3\xa5 designer jeg en helt ny preset til deg.");
+        return res;
     }
-    if (best < 0 || bestScore < 1.4f)
+    if (w.size() <= 3 && contains (w, { "takk", "thanks", "tusen", "nice", "digg", "kult", "bra", "perfekt", "perfect" }))
     {
-        best = currentSound >= 0 ? currentSound : hk::kDefaultSound;
-        r.notes.add (u ("Beholdt ") + u (hk::sounds()[(size_t) best].name) + u (" som utgangspunkt"));
+        res.reply = pick (r, { "Bare hyggelig! Trykk **Lagre** hvis du vil beholde den.", "S\xc3\xa5 bra! Vil du ha en til, skriv bare hva du \xc3\xb8nsker deg.",
+                               "Digg! Jeg kan lage flere n\xc3\xa5r du vil." });
+        return res;
     }
-    else
-        r.notes.add (u ("Valgte ") + u (hk::sounds()[(size_t) best].name));
-    r.sound = best;
-
-    //---- 2. adjust the controls
-    Builder b { hk::sounds()[(size_t) best].preset, r };
-    int at = 0;
-    auto has = [&] (std::initializer_list<const char*> k) { return contains (w, k, &at); };
-
-    if (has ({ "lys", "lysere", "bright", "brighter", "skarp", "crisp", "glitrende", "sparkling", "klar", "clear" }))
-    { const float k = intensityBefore (w, at); b.add ("tone", 0.15f * k); b.add ("air", 0.2f * k); r.notes.add (u ("Lysere tone og mer Air")); }
-    if (has ({ "mork", "morkere", "dark", "darker", "dempet", "muffled", "dull" }))
-    { const float k = intensityBefore (w, at); b.add ("tone", -0.2f * k); b.add ("air", -0.25f * k); r.notes.add (u ("M\xc3\xb8rkere tone")); }
-    if (has ({ "varm", "varmere", "warm", "warmer" }))
-    { const float k = intensityBefore (w, at); b.add ("tone", -0.08f * k); r.notes.add (u ("Varmere")); }
-    if (has ({ "luftig", "luft", "airy", "air", "fresh", "frisk", "apen", "open" }))
-    { const float k = intensityBefore (w, at); b.add ("air", 0.3f * k); r.notes.add (u ("Mer Air (luft og detaljer i toppen)")); }
-    if (has ({ "bred", "bredere", "wide", "wider", "stor", "big", "huge", "enorm" }))
-    { const float k = intensityBefore (w, at); b.add ("width", 0.18f * k); b.add ("reverbSize", 0.12f * k); r.notes.add (u ("Bredere stereo")); }
-    if (has ({ "smal", "mono", "narrow", "tett" }))
-    { b.add ("width", -0.25f); r.notes.add (u ("Smalere stereo")); }
-
-    if (has ({ "fet", "feit", "fat", "kraftig", "tung", "heavy", "punch", "punchy", "hard", "aggressiv", "aggressive" }))
-    { const float k = intensityBefore (w, at); b.set ("satOn", 1); b.set ("satDrive", juce::jmin (0.6f, 0.25f * k + 0.1f));
-      r.notes.add (u ("Saturation p\xc3\xa5 for mer kraft")); }
-    if (has ({ "distortion", "distort", "skitten", "dirty", "crunchy", "drive", "mettet", "saturated" }))
-    { const float k = intensityBefore (w, at); b.set ("satOn", 1); b.set ("satDrive", juce::jmin (0.85f, 0.4f * k));
-      r.notes.add (u ("Mer saturation / drive")); }
-
-    if (has ({ "reverb", "romklang", "hall", "rom", "space", "ambient", "drommende", "dreamy", "romslig" }))
+    if (contains (w, { "hjelp", "help" }) || normalise (text).contains ("hva kan du"))
     {
-        if (negatedBefore (w, at)) { b.set ("reverbOn", 0); r.notes.add (u ("Reverb av")); }
-        else { const float k = intensityBefore (w, at); b.set ("reverbOn", 1); b.set ("reverbMix", 0.22f + 0.14f * k); b.add ("reverbSize", 0.15f * k);
-               r.notes.add (u ("Mer reverb")); }
+        res.reply = u ("Jeg lager **helt nye lyder** ut fra det du skriver, gratis og uten internett.\n"
+                       "Skriv type lyd (piano, keys, rhodes, supersaw, synth, lead, pad, bass, pluck) og hvordan den skal l\xc3\xa5te "
+                       "(fet, m\xc3\xb8rk, lys, luftig, bred, lo-fi, kort, med reverb, delay, pump \xe2\x80\xa6).\n"
+                       "Etterp\xc3\xa5 kan du skrive \xc2\xab""fetere\xc2\xbb, \xc2\xabmer luft\xc2\xbb, \xc2\xabuten reverb\xc2\xbb, \xc2\xabny variant\xc2\xbb eller \xc2\xabkall den Sommer Keys\xc2\xbb.");
+        return res;
     }
-    if (has ({ "tort", "torr", "dry" })) { b.set ("reverbOn", 0); b.set ("delayOn", 0); r.notes.add (u ("T\xc3\xb8rr lyd (reverb og delay av)")); }
-    if (has ({ "delay", "ekko", "echo", "pingpong" }))
+
+    if (current != nullptr)
     {
-        if (negatedBefore (w, at)) { b.set ("delayOn", 0); r.notes.add (u ("Delay av")); }
-        else { const float k = intensityBefore (w, at); b.set ("delayOn", 1); b.set ("delayMix", 0.14f + 0.08f * k); b.set ("delayFb", 0.3f + 0.08f * k);
-               r.notes.add (u ("Delay p\xc3\xa5")); }
-    }
-    if (has ({ "chorus", "wobble", "shimmer" }))
-    {
-        if (negatedBefore (w, at)) { b.set ("chorusOn", 0); r.notes.add (u ("Chorus av")); }
-        else { const float k = intensityBefore (w, at); b.set ("chorusOn", 1); b.set ("chorusMix", 0.25f + 0.12f * k); r.notes.add (u ("Chorus p\xc3\xa5")); }
-    }
-    if (has ({ "pump", "pumpende", "pumping", "sidechain", "ducking" }))
-    {
-        if (negatedBefore (w, at)) { b.set ("pumpOn", 0); r.notes.add (u ("Pump av")); }
-        else { const float k = intensityBefore (w, at); b.set ("pumpOn", 1); b.set ("pumpDepth", juce::jmin (0.9f, 0.4f + 0.2f * k));
-               r.notes.add (u ("Pump i takt med kicken")); }
-    }
-    if (has ({ "vibrato", "vibrerende", "wobbly" }))
-    { const float k = intensityBefore (w, at); b.set ("vibOn", 1); b.set ("vibDepth", 0.2f * k + 0.05f); r.notes.add (u ("Vibrato p\xc3\xa5")); }
-    if (has ({ "filter", "filtrert", "filtered", "lowpass", "lavpass" }))
-    { b.set ("filterOn", 1); b.set ("cutoff", 1200.0f); b.set ("reso", 0.25f); r.notes.add (u ("Filter p\xc3\xa5 (1,2 kHz)")); }
-
-    if (has ({ "kort", "short", "staccato", "stab", "stabbete", "tight" }))
-    { b.set ("decay", 0.25f); b.set ("release", juce::jmin (b.get ("release"), 0.12f)); r.notes.add (u ("Kortere toner")); }
-    if (has ({ "lang", "lange", "long", "sustain", "svevende", "evig", "langt" }))
-    { b.set ("decay", 0.75f); b.add ("release", 0.5f); r.notes.add (u ("Lengre toner")); }
-    if (has ({ "swell", "fade", "langsom", "slow", "myk start", "sakte" }))
-    { b.set ("attack", 350.0f); r.notes.add (u ("Langsom attack")); }
-    if (has ({ "myk", "mykere", "soft", "softer", "rolig", "calm", "gentle" }))
-    { b.add ("tone", -0.08f); b.add ("air", -0.1f); r.notes.add (u ("Mykere")); }
-
-    // chords only when asked for explicitly
-    struct ChordWord { const char* w; int c; };
-    for (auto cw : { ChordWord { "min7", hk::kMin7 }, ChordWord { "m7", hk::kMin7 }, ChordWord { "min9", hk::kMin9 },
-                     ChordWord { "m9", hk::kMin9 }, ChordWord { "min11", hk::kMin11 }, ChordWord { "maj7", hk::kMaj7 },
-                     ChordWord { "maj9", hk::kMaj9 }, ChordWord { "sus", hk::kSus }, ChordWord { "sus4", hk::kSus } })
-        if (w.contains (cw.w)) { b.set ("chord", (float) cw.c); r.notes.add (u ("Chord: ") + juce::String (cw.w).toUpperCase()); break; }
-
-    //---- 3. build the NEW sound: base design + design changes + the controls above
-    r.baseSound = best;
-    r.def = hk::sounds()[(size_t) best];
-    writeParams (r.params, r.def.preset);
-    juce::StringArray nameWords;
-    designFromWords (w, r.def, r.notes, nameWords);
-    nameWords.removeDuplicates (true);
-    while (nameWords.size() > 2) nameWords.remove (nameWords.size() - 1);
-    static const char* kind[hk::kNumCategories] = { "Piano", "House Piano", "Keys", "Rhodes", "Supersaw", "Synth",
-                                                    "Lead", "Pad", "Bass", "Pluck", "Sample", "Lyd" };
-    r.name = (nameWords.joinIntoString (" ") + " " + kind[juce::jlimit (0, hk::kNumCategories - 1, r.def.category)]).trim();
-
-    r.ok = true;
-    return r;
-}
-
-//==============================================================================
-static juce::String buildSystemPrompt()
-{
-    juce::String s;
-    s << "You design sounds for HouseKeys, a house-music keys/synth plugin. The user describes a sound "
-         "(often in Norwegian). Pick the best base sound and set the controls.\n\nBase sounds (exact names):\n";
-    for (int c = 0; c < hk::kNumCategories; ++c)
-    {
-        juce::StringArray names;
-        for (auto& d : hk::sounds()) if (d.category == c && ! d.sampler.user) names.add (u (d.name));
-        if (names.size() > 0) s << "- " << hk::categoryName (c) << ": " << names.joinIntoString (", ") << "\n";
-    }
-    s << "\nControls (only include the ones you want to change from the base sound's own settings):\n"
-         "tone 0..1 (0.5 neutral), air 0..1 (top-end sparkle), attack 0..2000 ms, decay 0..1 (0.5 natural), "
-         "release 0.01..6 s, width 0..1 (0.5 normal), volume -24..6 dB,\n"
-         "filterOn 0/1, cutoff 80..18000 Hz, reso 0..1, satOn 0/1, satDrive 0..1, chorusOn 0/1, chorusMix 0..1,\n"
-         "delayOn 0/1, delayTime 0..5 (1/16,1/8,3/16,1/4,3/8,1/2), delayFb 0..0.9, delayMix 0..1,\n"
-         "reverbOn 0/1, reverbSize 0..1, reverbMix 0..1, pumpOn 0/1, pumpRate 0..2 (1/4,1/8,1/16), pumpDepth 0..1,\n"
-         "vibOn 0/1, vibRate 0.5..12 Hz, vibDepth 0..1, chord 0..6 (0 off - keep 0 unless the user asks for a chord).\n\n"
-         "You may also change the sound DESIGN to create a genuinely new sound. Optional \"design\" object, "
-         "only the fields you change:\n"
-         "va (virtual analog layer): level 0..1.5, wave1/wave2 (0 saw,1 square,2 triangle,3 sine), semi2 -24..24, fine2 cents, "
-         "mix2 0..1.5, unison 1..7, detune cents 0..60, spread 0..1, sub 0..1, noise 0..0.5, cutoff Hz, reso 0..0.95, "
-         "envAmt octaves -2..6, keytrack 0..1, fA/fD/fR ms, fS 0..1, decayMs (0 = no decay), sustain 0..1, poles 2|4, "
-         "drift cents, motion 0..1 (slow filter movement)\n"
-         "sampler (real piano layer): level 0..1.5, octave 0..1 (extra piano one octave up)\n"
-         "organ: level, bars [16',8',4',2 2/3',2'] 0..1, decay s, click 0..1\n"
-         "fm (electric piano / bell layer): level, ratioA, indexA, decA, ratioB, indexB, decB, mixB, decay\n"
-         "mono true/false, glideMs, lowCutHz, lowDb, highDb, drive 0..1, glue 0..1, tape 0..1\n\n"
-         "Answer with ONLY a JSON object, no other text:\n"
-         "{\"sound\": \"<exact base sound name>\", \"name\": \"<short catchy preset name>\", "
-         "\"design\": {\"va\": {\"unison\": 7}, ...}, \"params\": {\"air\": 0.7, ...}, "
-         "\"notes\": [\"short Norwegian sentence about what you did\", ...]}";
-    return s;
-}
-
-void askClaude (const juce::String& text, const juce::String& apiKey, int currentSound, std::function<void (Result)> done)
-{
-    juce::Thread::launch ([text, apiKey, currentSound, done]
-    {
-        Result r;
-        auto fail = [&] (const juce::String& why)
+        // rename
+        if (auto n = renameTarget (text); n.isNotEmpty())
         {
-            r = interpretLocal (text, currentSound);
-            r.notes.insert (0, u ("Claude svarte ikke (") + why + u (") \xe2\x80\x93 brukte innebygd AI"));
-        };
+            res.renamed = true; res.hasSound = true;
+            res.def = current->def; res.name = n; res.kind = current->kind; res.request = current->request;
+            res.chips = describe (res.def);
+            res.reply = u ("N\xc3\xa5 heter den **") + n + "**.";
+            return res;
+        }
 
-        juce::DynamicObject::Ptr msg = new juce::DynamicObject();
-        msg->setProperty ("role", "user");
-        msg->setProperty ("content", text);
-        juce::DynamicObject::Ptr body = new juce::DynamicObject();
-        body->setProperty ("model", "claude-sonnet-5-5");
-        body->setProperty ("max_tokens", 800);
-        body->setProperty ("system", buildSystemPrompt());
-        body->setProperty ("messages", juce::Array<juce::var> { juce::var (msg.get()) });
-
-        const juce::URL url = juce::URL ("https://api.anthropic.com/v1/messages")
-                                  .withPOSTData (juce::JSON::toString (juce::var (body.get()), true));
-        int status = 0;
-        auto stream = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inPostData)
-                                                 .withExtraHeaders ("x-api-key: " + apiKey.trim() + "\r\n"
-                                                                    "anthropic-version: 2023-06-01\r\n"
-                                                                    "content-type: application/json")
-                                                 .withConnectionTimeoutMs (30000)
-                                                 .withStatusCode (&status));
-        if (stream == nullptr) fail (u ("ingen nettverkstilkobling"));
-        else
+        // new variant of the same idea
+        const auto norm = " " + normalise (text) + " ";
+        const bool variant = contains (w, { "variant", "versjon", "version", "another", "annen", "igjen", "again" })
+                             || norm.contains (" en til ") || norm.contains (" one more ");
+        bool asksNew = ! mentionedKinds (w).empty() || contains (w, { "overrask", "surprise", "random", "tilfeldig" });
+        for (int i = 0; i < w.size(); ++i)
+            if (w[i] == "lag" || w[i] == "make" || w[i] == "create" || w[i] == "ny" || w[i] == "new")
+                if (! (i + 1 < w.size() && (w[i + 1] == "den" || w[i + 1] == "det" || w[i + 1] == "it" || w[i + 1] == "lyden"
+                                            || w[i + 1] == "denne" || w[i + 1] == "this" || w[i + 1] == "variant" || w[i + 1] == "versjon")))
+                    asksNew = true;
+        if (variant && ! asksNew)
         {
-            const auto reply = juce::JSON::parse (stream->readEntireStreamAsString());
-            if (status != 200)
-                fail (status == 401 ? u ("feil API-n\xc3\xb8kkel") : "HTTP " + juce::String (status));
-            else
+            int forced = -1;
+            if (current->isFactory)
+                for (int i = 0; i < hk::kNumSounds; ++i) if (current->name == u (hk::sounds()[(size_t) i].name)) forced = i;
+            auto req = current->request.isNotEmpty() ? current->request : current->name;
+            res = generate (words (req), req, seed, forced);
+            res.name = makeName (res.kind, {}, r);   // a variant gets its own name
+            res.reply = pick (r, { "Her er en ny variant: **%N**.", "Ny vri: **%N**.", "Pr\xc3\xb8v denne: **%N**." }).replace ("%N", res.name)
+                        + " " + res.reply.fromFirstOccurrenceOf ("\n", false, false);
+            return res;
+        }
+
+        // edit the current sound
+        if (! asksNew)
+        {
+            hk::SoundDef d = current->def;
+            juce::StringArray notes, adjectives;
+            designFromWords (w, d, notes, adjectives);
+            std::map<juce::String, float> m;
+            Builder b { d.preset, m };
+            applyControls (w, b, notes);
+            notes.removeDuplicates (true);
+            if (! notes.isEmpty())
             {
-                juce::String answer;
-                if (auto* content = reply.getProperty ("content", {}).getArray())
-                    for (auto& block : *content)
-                        if (block.getProperty ("type", {}).toString() == "text") answer << block.getProperty ("text", {}).toString();
-                const int a = answer.indexOfChar ('{'), z = answer.lastIndexOfChar ('}');
-                const auto j = a >= 0 && z > a ? juce::JSON::parse (answer.substring (a, z + 1)) : juce::var();
-                const auto name = j.getProperty ("sound", {}).toString();
-                for (int i = 0; i < hk::kNumSounds; ++i)
-                    if (name.equalsIgnoreCase (u (hk::sounds()[(size_t) i].name)) && ! hk::sounds()[(size_t) i].sampler.user) r.sound = i;
-                if (r.sound < 0) fail (u ("uventet svar"));
-                else
-                {
-                    if (auto* obj = j.getProperty ("params", {}).getDynamicObject())
-                        for (auto& p : obj->getProperties())
-                        {
-                            float v = (float) p.value;
-                            if (clampParam (p.name.toString(), v)) r.params[p.name.toString()] = v;
-                        }
-                    if (auto* n = j.getProperty ("notes", {}).getArray())
-                        for (auto& line : *n) r.notes.add (line.toString());
-                    r.baseSound = r.sound;
-                    r.def = hk::sounds()[(size_t) r.sound];
-                    if (auto design = j.getProperty ("design", {}); design.isObject())
-                        codec::fromVar (design, r.def);
-                    writeParams (r.params, r.def.preset);
-                    r.name = j.getProperty ("name", u (r.def.name)).toString().substring (0, 40);
-                    r.ok = true;
-                    r.fromClaude = true;
-                }
+                writeParams (m, d.preset);
+                clampParams (d.preset);
+                codec::sanitise (d);
+                d.name = ""; d.tag = "";
+                res.hasSound = true;
+                res.def = d;
+                res.kind = current->kind >= 0 ? current->kind : d.category;
+                res.request = current->request.isNotEmpty() ? current->request + " " + text : text;
+                res.name = current->isFactory ? makeName (res.kind, adjectives, r) : current->name;
+                res.chips = describe (d);
+                res.levelSound = -1;   // keep the loudness of the version before
+                res.reply = (current->isFactory ? u ("Jeg tok **") + current->name + u ("** og laget en ny lyd av den: **") + res.name + "**. "
+                                                : u ("Oppdatert **") + res.name + u ("** \xe2\x80\x93 "))
+                            + joinNotes (notes) + ".";
+                return res;
+            }
+            if (w.size() <= 2)
+            {
+                res.reply = u ("Den skj\xc3\xb8nte jeg ikke helt. Pr\xc3\xb8v f.eks. \xc2\xab""fetere\xc2\xbb, \xc2\xabm\xc3\xb8rkere\xc2\xbb, \xc2\xabmer luft\xc2\xbb, "
+                               "\xc2\xabmer reverb\xc2\xbb, \xc2\xabkortere\xc2\xbb, \xc2\xabny variant\xc2\xbb \xe2\x80\x93 eller beskriv en ny lyd.");
+                return res;
             }
         }
-        juce::MessageManager::callAsync ([done, r] { done (r); });
-    });
+    }
+    return generate (w, text.trim(), seed, -1);
 }
 
 //==============================================================================
-static juce::File settingsFile()
+const std::vector<PreviewNote>& previewPattern (int kind, bool mono)
 {
-    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-             .getChildFile ("Application Support").getChildFile ("HouseKeys").getChildFile ("settings.xml");
+    static const std::vector<PreviewNote> chords = {
+        { 0.00f, 0.55f, 45, 0.85f }, { 0.00f, 0.55f, 57, 0.8f }, { 0.00f, 0.55f, 60, 0.8f }, { 0.00f, 0.55f, 64, 0.8f }, { 0.00f, 0.55f, 67, 0.8f },
+        { 0.75f, 1.05f, 57, 0.75f }, { 0.75f, 1.05f, 60, 0.75f }, { 0.75f, 1.05f, 64, 0.75f }, { 0.75f, 1.05f, 67, 0.75f },
+        { 1.25f, 2.30f, 41, 0.85f }, { 1.25f, 2.30f, 57, 0.8f }, { 1.25f, 2.30f, 60, 0.8f }, { 1.25f, 2.30f, 64, 0.8f }, { 1.25f, 2.30f, 69, 0.8f } };
+    static const std::vector<PreviewNote> bass = {
+        { 0.25f, 0.45f, 33, 0.95f }, { 0.75f, 0.95f, 33, 0.85f }, { 1.25f, 1.45f, 33, 0.9f }, { 1.625f, 1.75f, 45, 0.8f }, { 1.75f, 2.10f, 31, 0.9f } };
+    static const std::vector<PreviewNote> lead = {
+        { 0.00f, 0.42f, 69, 0.85f }, { 0.375f, 0.80f, 72, 0.85f }, { 0.75f, 1.17f, 74, 0.85f }, { 1.125f, 2.20f, 76, 0.9f } };
+    static const std::vector<PreviewNote> pad = {
+        { 0.0f, 2.6f, 57, 0.75f }, { 0.0f, 2.6f, 60, 0.75f }, { 0.0f, 2.6f, 64, 0.75f }, { 0.0f, 2.6f, 67, 0.75f } };
+    static const std::vector<PreviewNote> pluck = [] {
+        std::vector<PreviewNote> v;
+        const int arp[] = { 57, 60, 64, 67, 72, 67, 64, 60 };
+        for (int i = 0; i < 16; ++i) v.push_back ({ i * 0.14f, i * 0.14f + 0.11f, arp[i % 8] + (i >= 8 ? 2 : 0), i % 4 == 0 ? 0.95f : 0.75f });
+        return v; } ();
+    if (kind == hk::kCatBass) return bass;
+    if (kind == hk::kCatLeads || mono) return lead;
+    if (kind == hk::kCatPads) return pad;
+    if (kind == hk::kCatPlucks) return pluck;
+    return chords;
 }
 
-juce::String loadApiKey()
+float previewLength (int kind, bool mono)
 {
-    if (auto xml = juce::XmlDocument::parse (settingsFile())) return xml->getStringAttribute ("anthropicApiKey");
-    return {};
+    float t = 0;
+    for (auto& n : previewPattern (kind, mono)) t = std::max (t, n.t1);
+    return t;
 }
 
-void saveApiKey (const juce::String& key)
+static double measureDb (const hk::SoundDef& def, int kind, const hk::SampleBank* bank)
 {
-    auto f = settingsFile();
-    f.getParentDirectory().createDirectory();
-    juce::XmlElement xml ("HouseKeysSettings");
-    xml.setAttribute ("anthropicApiKey", key.trim());
-    xml.writeTo (f);
-    f.setReadOnly (false);
+    constexpr int sr = 44100, blockSize = 256;
+    hk::SoundDef d = def;
+    hk::Params p = d.preset;
+    p.sound = hk::kAiSound; p.volumeDb = -3.0f; p.chord = hk::kChordOff;
+    auto eng = std::make_unique<hk::Engine>();
+    eng->setCustomSound (&d);
+    eng->setSampleBank (bank);
+    eng->setParams (p);
+    eng->prepare (sr, blockSize);
+
+    const auto& pat = previewPattern (kind, d.mono);
+    const int total = (int) ((previewLength (kind, d.mono) + 0.2f) * sr);
+    std::vector<float> L ((size_t) total), R ((size_t) total);
+    double sum = 0;
+    for (int pos = 0; pos < total; pos += blockSize)
+    {
+        const int n = std::min (blockSize, total - pos);
+        for (auto& e : pat)
+        {
+            const int off = (int) (e.t1 * sr);
+            if (off >= pos && off < pos + n) eng->noteOff (e.note);
+        }
+        for (auto& e : pat)
+        {
+            const int on = (int) (e.t0 * sr);
+            if (on >= pos && on < pos + n) eng->noteOn (e.note, e.vel);
+        }
+        eng->process (L.data() + pos, R.data() + pos, n, 124.0, pos * 124.0 / 60.0 / sr, true);
+    }
+    // K-weighting (ITU BS.1770: high shelf +4 dB around 1.7 kHz, high-pass at 38 Hz) so the result is LUFS-like
+    struct Biquad
+    {
+        double b0, b1, b2, a1, a2, z1 = 0, z2 = 0;
+        double run (double x) { const double y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return y; }
+    };
+    auto shelf = [] (double fs, double f0, double gainDb, double q)
+    {
+        const double A = std::pow (10.0, gainDb / 40.0), w = 2.0 * juce::MathConstants<double>::pi * f0 / fs;
+        const double cw = std::cos (w), al = std::sin (w) / (2.0 * q), sA = 2.0 * std::sqrt (A) * al;
+        const double a0 = (A + 1) - (A - 1) * cw + sA;
+        return Biquad { A * ((A + 1) + (A - 1) * cw + sA) / a0, -2 * A * ((A - 1) + (A + 1) * cw) / a0,
+                        A * ((A + 1) + (A - 1) * cw - sA) / a0, 2 * ((A - 1) - (A + 1) * cw) / a0, ((A + 1) - (A - 1) * cw - sA) / a0 };
+    };
+    auto highpass = [] (double fs, double f0, double q)
+    {
+        const double w = 2.0 * juce::MathConstants<double>::pi * f0 / fs, cw = std::cos (w), al = std::sin (w) / (2.0 * q), a0 = 1 + al;
+        return Biquad { (1 + cw) / 2 / a0, -(1 + cw) / a0, (1 + cw) / 2 / a0, -2 * cw / a0, (1 - al) / a0 };
+    };
+    Biquad sl = shelf (sr, 1681.97, 4.0, 0.7072), sr2 = sl, hl = highpass (sr, 38.135, 0.5003), hr = hl;
+    for (int i = 0; i < total; ++i)
+    {
+        const double l = hl.run (sl.run (L[(size_t) i])), rr = hr.run (sr2.run (R[(size_t) i]));
+        sum += l * l + rr * rr;
+    }
+    return 10.0 * std::log10 (sum / total + 1e-12);
+}
+
+void autoLevel (Result& r, const hk::SampleBank* bank, const Context* previous)
+{
+    if (! r.hasSound || r.renamed) return;
+    hk::SoundDef ref;
+    if (r.levelSound >= 0) ref = hk::sounds()[(size_t) r.levelSound];
+    else if (previous != nullptr) ref = previous->def;
+    else return;
+    const double refDb = measureDb (ref, r.kind, bank);
+    for (int iter = 0; iter < 2; ++iter)
+    {
+        const double diff = refDb - measureDb (r.def, r.kind, bank);
+        if (std::abs (diff) < 0.4) break;
+        r.def.gainDb = (float) juce::jlimit (-24.0, 12.0, r.def.gainDb + diff);
+    }
 }
 
 juce::StringArray examples()
 {
     return { u ("fet house piano med mye luft og pump"),
              u ("m\xc3\xb8rk lo-fi rhodes med delay"),
-             u ("bred euforisk supersaw med reverb"),
-             u ("tung reese bass"),
-             u ("myk drømmende pad"),
-             u ("kort lys pluck med ekko") };
+             u ("bred euforisk supersaw"),
+             u ("tung acid bass"),
+             u ("dr\xc3\xb8mmende pad med bjelle"),
+             u ("overrask meg") };
+}
+
+juce::StringArray followUps()
+{
+    return { u ("Ny variant"), u ("Fetere"), u ("M\xc3\xb8rkere"), u ("Lysere"), u ("Mer luft"), u ("Mer pump"), u ("Kortere"), u ("Mer reverb") };
 }
 } // namespace PresetAI

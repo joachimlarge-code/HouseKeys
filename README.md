@@ -1,4 +1,4 @@
-# HouseKeys 3.5
+# HouseKeys 3.6
 
 Et house keys-instrument for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel).
 Ekte samplet flygel, friske house-pianoer, Rhodes, pads, bass, plucks og synth-akkorder,
@@ -73,22 +73,21 @@ Alle lydene er nivåkalibrert (ca. −13,5 LUFS, pianoer og leads −14,5, bass 
 **Tools → Last tweaked → Create automation clip** (eller **Add → Automation from last tweaked parameter**).
 FL Studio lar ikke plugins lage clipet selv, så dette er den raskeste veien.
 
-## ✦ AI: lag lyden du vil ha
+## ✦ AI-chat: lag helt nye lyder (gratis)
 
-Trykk **✦ AI** øverst og skriv hva du vil ha, på norsk eller engelsk, f.eks.
-*«fet house piano med mye luft og pump»*, *«mørk lo-fi rhodes med delay»* eller *«bred pad med orgel»*.
-AI-en lager en **ny lyd**: den tar beste grunnlyd og endrer selve lyddesignet (flere stemmer,
-supersaw-, orgel- eller bjellelag, oktav, sub, filter, acid, glide …) og stiller inn alle knapper og effekter.
+Trykk **✦ AI** øverst og chat med HouseKeys AI. Den er **gratis**, trenger **ingen nøkkel og ikke internett**,
+og lager **helt nye presets**:
 
-Liker du lyden, skriv et navn og trykk **Lagre som preset**. Den havner under **Mine lyder** i lydleseren
-og kan brukes i alle prosjekter. Presetene ligger i `~/Library/Application Support/HouseKeys/Presets/`.
+1. Skriv hva du vil ha, f.eks. *«fet house piano med mye luft og pump»*, *«tung acid bass»* eller *«overrask meg»*.
+2. AI-en velger to lyder som passer, krysser dem (alle lag, oscillatorer, filtre og effekter blandes),
+   varierer verdiene litt tilfeldig, legger ofte til en ekstra ingrediens (bjelle, pad, orgel, sub, piano under saw …),
+   former lyden etter ordene dine og gir den et navn. Til slutt nivåtilpasses den, så den ikke er for høy eller lav.
+3. Lyden kommer som et kort i chatten: **▶ Spill** spiller en liten frase, **Lagre** legger den under **Mine lyder**,
+   **Ny variant** lager en ny versjon av samme idé.
 
-- **Innebygd AI** (standard): gratis, virker uten internett, svarer med en gang. Forstår lydtyper
-  (piano, rhodes, pad, bass, lead, pluck, supersaw …), karakter (fet, mørk, lys, luftig, bred, kort, lang,
-  lo-fi, myk …), effekter (reverb, delay, chorus, pump, vibrato, filter, «uten reverb») og styrke («litt», «mye»).
-- **Claude** (valgfritt): lim inn din egen Anthropic API-nøkkel nederst i AI-panelet for friere beskrivelser.
-  Nøkkelen lagres bare på din Mac (`~/Library/Application Support/HouseKeys/settings.xml`), ikke i prosjekter.
-  Bruk koster litt per forespørsel på din Anthropic-konto. Hvis Claude ikke svarer, brukes den innebygde AI-en.
+Etterpå kan du fortsette å chatte: *«fetere»*, *«mørkere»*, *«mer luft»*, *«mindre reverb»*, *«uten delay»*,
+*«mer bass»*, *«kortere»*, *«ny variant»* eller *«kall den Sommer Keys»*. Står du på en vanlig lyd og skriver f.eks.
+*«gjør den fetere»*, lages en ny lyd basert på den. Klikk på et eldre kort i chatten for å hente den lyden tilbake.
 
 ## Ditt sample (dra og slipp)
 

@@ -807,9 +807,9 @@ Result generate (const juce::StringArray& w, const juce::String& request, juce::
 bool wantsScratch (const juce::StringArray& w, const juce::String& text)
 {
     const auto norm = " " + normalise (text) + " ";
-    return contains (w, { "bunn", "bunnen", "scratch", "unik", "unique", "eksperimentell", "experimental", "rar", "weird", "alien",
+    return contains (w, { "bunnen", "scratch", "unik", "unique", "eksperimentell", "experimental", "rar", "weird", "alien",
                           "futuristisk", "futuristic", "ukjent", "sci", "romvesen", "robot", "glitch", "original" })
-        || norm.contains (" helt ny ") || norm.contains (" aldri hort ") || norm.contains (" ny synth ") || norm.contains (" egen synth ");
+        || norm.contains (" fra bunn ") || norm.contains (" helt ny ") || norm.contains (" aldri hort ") || norm.contains (" ny synth ") || norm.contains (" egen synth ");
 }
 
 enum Role { kRoleChord, kRoleStab, kRolePluck, kRoleLead, kRolePad, kRoleBass, kRoleKeys };

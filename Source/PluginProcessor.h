@@ -68,6 +68,7 @@ public:
         juce::StringArray chips;
         bool saved = false;
         bool edited = false;   // a change of the sound before (not a brand-new sound)
+        bool scratch = false;  // designed from scratch
     };
     const std::vector<ChatMessage>& getChat() const { return chat; }
     bool isAiThinking() const { return aiBusy; }

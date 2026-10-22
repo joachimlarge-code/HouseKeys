@@ -54,7 +54,8 @@ public:
     {
         noteOffInternal (note, true);
         const SoundDef& d = cur();
-        const bool vaOnly = d.organ.level <= 0.0f && d.fm.level <= 0.0f && d.keys.level <= 0.0f && d.sampler.level <= 0.0f;
+        const bool vaOnly = d.organ.level <= 0.0f && d.fm.level <= 0.0f && d.keys.level <= 0.0f && d.sampler.level <= 0.0f
+                         && d.str.level <= 0.0f;
         if (d.mono && p.chord == kChordOff && vaOnly)
         {
             // mono legato: keep the oscillators running and only retrigger the envelopes -> no clicks
@@ -175,6 +176,15 @@ private:
         float fenv = 0, vamp = 1, driftPh = 0, driftInc = 0, driftAmt = 0;
         int fStage = 0, cutCounter = 0;
         bool ampRise = false;
+        float lfoPh = 0, penv = 0;                 // LFO phase, pitch envelope (1 -> 0)
+        Svf fmt[2][2];                             // vowel filter: two formants per channel
+        float vowelPos = -1.0f;
+
+        // plucked string
+        bool strOn = false;
+        int ksW = 0, ksLife = 0;
+        float ksDelay = 0, ksG = 0, ksAmp = 0, ksPrev = 0, ksB = 0.5f;
+        std::array<float, 4096> ks {};
     };
 
     struct RelVoice { const SampleZone* z = nullptr; double pos = 0, inc = 1; float gain = 0; };
@@ -390,6 +400,33 @@ private:
             v.driftAmt = va.drift;
             v.fenv = 0.0f; v.fStage = 0; v.vamp = 1.0f;
             for (auto& ch : v.vf) for (auto& st : ch) st.reset();
+            for (auto& ch : v.fmt) for (auto& st : ch) st.reset();
+            v.lfoPh = 0.0f; v.vowelPos = -1.0f;
+            v.penv = va.pEnvSemi != 0.0f ? 1.0f : 0.0f;
+        }
+
+        //---- plucked string: a delay line one period long, filled with a noise burst
+        if (d.str.level > 0.0f)
+        {
+            const StrDef& st = d.str;
+            const float period = fs / f;
+            if (period > 2.0f && period < 4000.0f)
+            {
+                v.strOn = true;
+                v.ksB = 0.15f + 0.85f * clamp01 (st.damp + 0.25f * toneOffset());
+                v.ksDelay = period - 0.5f * (1.0f - v.ksB);
+                v.ksG = std::pow (0.001f, (1.0f / f) / std::max (0.05f, st.decay * kt * ds));
+                v.ksAmp = st.level * (0.35f + 0.65f * vel) * 0.9f;
+                v.ksLife = (int) ((st.decay * kt * ds * 1.6f + 0.2f) * fs);
+                const float pc = 0.08f + 0.9f * clamp01 (st.pick * (0.6f + 0.4f * vel));
+                float lp = 0.0f, mean = 0.0f;
+                const int len = (int) period + 2;
+                for (int i = 0; i < len; ++i) { lp += pc * (v.rng.next() - lp); v.ks[(size_t) i] = lp; mean += lp; }
+                mean /= (float) len;
+                for (int i = 0; i < len; ++i) v.ks[(size_t) i] -= mean;   // no DC thump
+                v.ksW = len % (int) v.ks.size();
+                v.ksPrev = 0.0f;
+            }
         }
     }
 
@@ -414,6 +451,7 @@ private:
         v.subInc = 0.5f * f / fs;
         v.note = note; v.trigger = note; v.vel = vel; v.order = ++counter;
         v.fStage = 0; v.ampRise = true;
+        if (sd.va.pEnvSemi != 0.0f && sd.glideMs <= 0.0f) v.penv = 1.0f;
     }
 
     void releaseVoice (Voice& v)
@@ -677,8 +715,24 @@ private:
             const float q = 0.6f + va.reso * va.reso * 6.0f;
             const float lvl = va.level * (1.0f - va.velSens + va.velSens * v.vel) * 0.55f / std::sqrt ((float) v.uni);
             const float m2 = va.mix2;
+            // extra blocks
+            static const double divBeats[6] = { 0.0, 2.0, 1.0, 0.5, 0.25, 1.0 / 3.0 };
+            const float lfoHz = va.lfoDiv > 0 ? (float) (curBpm / 60.0 / divBeats[std::clamp (va.lfoDiv, 1, 5)]) : va.lfoRate;
+            const bool hasLfo = lfoHz > 0.0f && (va.lfoCut > 0.0f || va.lfoPitch > 0.0f || va.lfoVowel > 0.0f || va.lfoAmp > 0.0f);
+            const float lfoInc = lfoHz / fs;
+            const bool hasPenv = va.pEnvSemi != 0.0f;
+            const float pDec = std::exp (-1.0f / (std::max (1.0f, va.pEnvMs) * 0.001f * fs));
+            const float ringAmt = va.ring, foldK = 1.0f + va.fold * 5.0f;
+            const float oscNorm = 1.0f / (std::sqrt ((float) v.uni) * (1.0f + m2));
+            const bool hasFormant = va.formant > 0.0f;
+            float lfo = 0.0f;
             for (int i = 0; i < n; ++i)
             {
+                if (hasLfo)
+                {
+                    lfo = std::sin (kTwoPi * v.lfoPh);
+                    v.lfoPh += lfoInc; if (v.lfoPh >= 1.0f) v.lfoPh -= 1.0f;
+                }
                 // filter envelope
                 if (v.released)       v.fenv *= fRc;
                 else if (v.fStage == 0) { v.fenv += fAinc; if (v.fenv >= 1.0f) { v.fenv = 1.0f; v.fStage = 1; } }
@@ -691,18 +745,40 @@ private:
                     v.cutCounter = 8;
                     v.driftPh += v.driftInc * 8.0f; v.driftPh -= std::floor (v.driftPh);
                     const float mo = va.motion * std::sin (kTwoPi * v.driftPh + 1.3f * (float) v.note);
-                    const float fc = std::exp2 (std::clamp (baseOct + va.envAmt * v.fenv + mo, 4.3f, 14.2f));
+                    const float fc = std::exp2 (std::clamp (baseOct + va.envAmt * v.fenv + mo + va.lfoCut * lfo, 4.3f, 14.2f));
                     for (auto& ch : v.vf) for (auto& st : ch) st.set (fc, q, fs);
+                    if (hasFormant)
+                    {
+                        // a - e - i - o - u
+                        static const float F1[5] = { 800.0f, 420.0f, 280.0f, 480.0f, 330.0f };
+                        static const float F2[5] = { 1200.0f, 1900.0f, 2300.0f, 820.0f, 700.0f };
+                        const float vp = clamp01 (va.vowel + 0.5f * va.lfoVowel * lfo) * 3.999f;
+                        if (std::abs (vp - v.vowelPos) > 0.002f)
+                        {
+                            v.vowelPos = vp;
+                            const int k0 = (int) vp; const float t = vp - (float) k0;
+                            const float f1 = F1[k0] + (F1[k0 + 1] - F1[k0]) * t, f2 = F2[k0] + (F2[k0 + 1] - F2[k0]) * t;
+                            for (int ch = 0; ch < 2; ++ch) { v.fmt[ch][0].set (f1, 7.0f, fs); v.fmt[ch][1].set (f2, 9.0f, fs); }
+                        }
+                    }
                 }
                 v.glide = 1.0f + (v.glide - 1.0f) * v.glideC;
-                const float drift = (1.0f + v.driftAmt * 0.000578f * std::sin (kTwoPi * v.driftPh)) * v.glide
-                                  * (vib0 + vibStep * (float) i);
+                float drift = (1.0f + v.driftAmt * 0.000578f * std::sin (kTwoPi * v.driftPh)) * v.glide
+                            * (vib0 + vibStep * (float) i);
+                if (hasPenv) { drift *= std::exp2 (va.pEnvSemi * v.penv / 12.0f); v.penv *= pDec; }
+                if (va.lfoPitch > 0.0f && hasLfo) drift *= 1.0f + va.lfoPitch * 0.000578f * lfo;
                 float l = 0.0f, r = 0.0f;
                 for (int u = 0; u < v.uni; ++u)
                 {
                     const float d0 = v.vinc[0][u] * drift, d1 = v.vinc[1][u] * drift;
-                    float x = osc (va.wave1, v.vph[0][u], d0);
-                    if (m2 > 0.0f) x += m2 * osc (va.wave2, v.vph[1][u], d1);
+                    const float o1 = osc (va.wave1, v.vph[0][u], d0);
+                    float x = o1;
+                    if (m2 > 0.0f)
+                    {
+                        const float o2 = osc (va.wave2, v.vph[1][u], d1);
+                        x += m2 * o2;
+                        if (ringAmt > 0.0f) x += ringAmt * ((1.0f + m2) * o1 * o2 - x);
+                    }
                     v.vph[0][u] += d0; if (v.vph[0][u] >= 1.0f) v.vph[0][u] -= 1.0f;
                     v.vph[1][u] += d1; if (v.vph[1][u] >= 1.0f) v.vph[1][u] -= 1.0f;
                     l += x * (1.0f + v.vpan[u]);
@@ -715,13 +791,61 @@ private:
                     const float nz = va.noise * v.rng.next() * std::sqrt ((float) v.uni);
                     l += sb + nz; r += sb + nz;
                 }
-                l = v.vf[0][0].process (l); r = v.vf[1][0].process (r);
-                if (va.poles >= 4) { l = v.vf[0][1].process (l); r = v.vf[1][1].process (r); }
-                const float g = lvl * v.vamp;
+                if (va.fold > 0.0f)
+                {
+                    l = std::sin (l * oscNorm * foldK * 1.5708f) / oscNorm * 0.75f;
+                    r = std::sin (r * oscNorm * foldK * 1.5708f) / oscNorm * 0.75f;
+                }
+                if (va.fType == 0)
+                {
+                    l = v.vf[0][0].process (l); r = v.vf[1][0].process (r);
+                    if (va.poles >= 4) { l = v.vf[0][1].process (l); r = v.vf[1][1].process (r); }
+                }
+                else if (va.fType == 1)
+                {
+                    l = 1.6f * v.vf[0][0].bp (l); r = 1.6f * v.vf[1][0].bp (r);
+                    if (va.poles >= 4) { l = 1.4f * v.vf[0][1].bp (l); r = 1.4f * v.vf[1][1].bp (r); }
+                }
+                else
+                {
+                    l = v.vf[0][0].hp (l); r = v.vf[1][0].hp (r);
+                    if (va.poles >= 4) { l = v.vf[0][1].hp (l); r = v.vf[1][1].hp (r); }
+                }
+                if (hasFormant)
+                {
+                    const float yl = 2.2f * v.fmt[0][0].bp (l) + 1.6f * v.fmt[0][1].bp (l);
+                    const float yr = 2.2f * v.fmt[1][0].bp (r) + 1.6f * v.fmt[1][1].bp (r);
+                    l += va.formant * (yl - l); r += va.formant * (yr - r);
+                }
+                float g = lvl * v.vamp;
+                if (va.lfoAmp > 0.0f && hasLfo) g *= 1.0f - va.lfoAmp * (0.5f + 0.5f * lfo);
                 out[i] += 0.5f * (l + r) * g;
                 sd[i]  += 0.5f * (l - r) * g;
             }
             if (v.vamp < 1.0e-4f && sus <= 0.0f) v.vaOn = false; else alive = true;
+        }
+
+        //---- plucked string
+        if (v.strOn)
+        {
+            const int N = (int) v.ks.size();
+            const float dl = v.ksDelay;
+            const int di = (int) dl;
+            const float fr = dl - (float) di;
+            const float b = v.ksB, gk = v.ksG, amp = v.ksAmp;
+            for (int i = 0; i < n; ++i)
+            {
+                int r0 = v.ksW - di;     if (r0 < 0) r0 += N;
+                int r1 = r0 - 1;         if (r1 < 0) r1 += N;
+                const float y = v.ks[(size_t) r0] + (v.ks[(size_t) r1] - v.ks[(size_t) r0]) * fr;
+                const float z = (b * y + (1.0f - b) * 0.5f * (y + v.ksPrev)) * gk;
+                v.ksPrev = y;
+                v.ks[(size_t) v.ksW] = z;
+                if (++v.ksW >= N) v.ksW = 0;
+                out[i] += y * amp;
+            }
+            v.ksLife -= n;
+            if (v.ksLife <= 0) v.strOn = false; else alive = true;
         }
 
         //---- master envelope + output
@@ -783,6 +907,7 @@ private:
     {
         const SoundDef& d = cur();
         if (needsSnap) snap (d, bpm);
+        curBpm = bpm;
 
         std::fill (L, L + n, 0.0f);
         std::fill (R, R + n, 0.0f);
@@ -962,6 +1087,7 @@ private:
     std::array<RelVoice, kRelVoices> relVoices {};
     std::vector<float> mono, side;
     uint64_t counter = 0;
+    double curBpm = 120.0;
     bool pedal = false, needsSnap = true;
     float modWheel = 0.0f;
 

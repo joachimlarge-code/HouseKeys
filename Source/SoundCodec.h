@@ -25,7 +25,9 @@ inline void get (const var& o, const char* k, bool& v)  { if (o.hasProperty (k))
 #define HK_FIELDS_KEYS(X)    X(level) X(tilt) X(kc) X(odd) X(h2) X(h3) X(tau) X(bright) X(sus) X(tauS) X(detune) X(spread) X(brightS)
 #define HK_FIELDS_VA(X)      X(level) X(wave1) X(wave2) X(semi2) X(fine2) X(mix2) X(unison) X(detune) X(spread) X(sub) X(noise) \
                              X(cutoff) X(reso) X(envAmt) X(keytrack) X(velAmt) X(fA) X(fD) X(fS) X(fR) X(decayMs) X(sustain) \
-                             X(poles) X(drift) X(motion) X(velSens)
+                             X(poles) X(drift) X(motion) X(velSens) X(fold) X(ring) X(fType) X(formant) X(vowel) \
+                             X(lfoRate) X(lfoDiv) X(lfoCut) X(lfoPitch) X(lfoVowel) X(lfoAmp) X(pEnvSemi) X(pEnvMs)
+#define HK_FIELDS_STR(X)     X(level) X(damp) X(decay) X(pick)
 #define HK_FIELDS_SOUND(X)   X(mono) X(glideMs) X(lowCutHz) X(lowDb) X(highDb) X(drive) X(glue) X(tape) X(gainDb)
 #define HK_FIELDS_PARAMS(X)  X(tone) X(air) X(attackMs) X(decay) X(releaseS) X(width) X(volumeDb) X(chord) X(filterOn) \
                              X(cutoffHz) X(resonance) X(satOn) X(satDrive) X(chorusOn) X(chorusMix) X(delayOn) X(delayTime) \
@@ -86,6 +88,11 @@ inline var toVar (const hk::SoundDef& d)
       HK_FIELDS_VA (X)
 #undef X
       o->setProperty ("va", var (s.get())); }
+    { juce::DynamicObject::Ptr s = new juce::DynamicObject();
+#define X(f) put (*s, #f, d.str.f);
+      HK_FIELDS_STR (X)
+#undef X
+      o->setProperty ("str", var (s.get())); }
 #define X(f) put (*o, #f, d.f);
     HK_FIELDS_SOUND (X)
 #undef X
@@ -111,6 +118,11 @@ inline void sanitise (hk::SoundDef& d)
     c (d.va.decayMs, 0, 10000); c (d.va.sustain, 0, 1); c (d.va.drift, 0, 15); c (d.va.motion, 0, 1); c (d.va.velSens, 0, 1);
     d.va.unison = juce::jlimit (1, 7, d.va.unison); d.va.poles = d.va.poles >= 3 ? 4 : 2;
     d.va.wave1 = juce::jlimit (0, 3, d.va.wave1); d.va.wave2 = juce::jlimit (0, 3, d.va.wave2);
+    c (d.va.fold, 0, 1); c (d.va.ring, 0, 1); d.va.fType = juce::jlimit (0, 2, d.va.fType);
+    c (d.va.formant, 0, 1); c (d.va.vowel, 0, 1); c (d.va.lfoRate, 0, 20); d.va.lfoDiv = juce::jlimit (0, 5, d.va.lfoDiv);
+    c (d.va.lfoCut, 0, 4); c (d.va.lfoPitch, 0, 100); c (d.va.lfoVowel, 0, 1); c (d.va.lfoAmp, 0, 1);
+    c (d.va.pEnvSemi, -48, 48); c (d.va.pEnvMs, 1, 2000);
+    c (d.str.level, 0, 1.5f); c (d.str.damp, 0, 1); c (d.str.decay, 0.05f, 10); c (d.str.pick, 0, 1);
     c (d.glideMs, 0, 1000); c (d.lowCutHz, 20, 600); c (d.lowDb, -12, 12); c (d.highDb, -12, 12);
     c (d.drive, 0, 1); c (d.glue, 0, 1); c (d.tape, 0, 1); c (d.gainDb, -24, 12);
     d.sampler.user = false;   // custom sounds never point at the dropped sample
@@ -149,6 +161,12 @@ inline void fromVar (const var& v, hk::SoundDef& d)
     {
 #define X(f) get (s, #f, d.va.f);
         HK_FIELDS_VA (X)
+#undef X
+    }
+    if (auto s = v.getProperty ("str", {}); s.isObject())
+    {
+#define X(f) get (s, #f, d.str.f);
+        HK_FIELDS_STR (X)
 #undef X
     }
 #define X(f) get (v, #f, d.f);

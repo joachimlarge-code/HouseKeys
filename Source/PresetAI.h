@@ -28,6 +28,7 @@ namespace PresetAI
     {
         bool hasSound = false;
         bool renamed = false;       // only the name changed
+        bool scratch = false;       // designed from scratch (no factory sound)
         juce::String reply;         // what the AI says (supports **bold**)
         juce::StringArray chips;    // what is in the sound (layers, effects)
         hk::SoundDef def;

@@ -336,6 +336,7 @@ void HouseKeysProcessor::finishChat (PresetAI::Result r)
         m.chips = r.chips;
         m.request = r.request;
         m.edited = ! isNew;
+        m.scratch = r.scratch;
     }
     chat.push_back (m);
     if (m.hasSound) useChatSound ((int) chat.size() - 1, false);

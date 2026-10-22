@@ -1,4 +1,4 @@
-# HouseKeys 3.6
+# HouseKeys 3.7
 
 Et house keys-instrument for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel).
 Ekte samplet flygel, friske house-pianoer, Rhodes, pads, bass, plucks og synth-akkorder,
@@ -84,6 +84,22 @@ og lager **helt nye presets**:
    former lyden etter ordene dine og gir den et navn. Til slutt nivåtilpasses den, så den ikke er for høy eller lav.
 3. Lyden kommer som et kort i chatten: **▶ Spill** spiller en liten frase, **Lagre** legger den under **Mine lyder**,
    **Ny variant** lager en ny versjon av samme idé.
+
+### Fra bunnen: helt nye synther
+
+Skriv *«helt ny synth fra bunnen»*, *«unik pluck»*, *«rar alien bass»* eller trykk **✦ Fra bunnen**. Da bruker AI-en
+**ingen** ferdig lyd, men bygger hele synthen selv: hvor mange oscillatorer og hvilke bølgeformer, intervall mellom dem,
+filtertype (lowpass/bandpass/highpass), konvolutter, og om den skal ha FM-lag, plukket streng, orgel eller piano.
+Den kan også bruke nye byggeklosser som ikke finnes i fabrikklydene:
+
+- **Wavefolder**: metallisk, growlete klang
+- **Ring-modulasjon**: klokke- og robotaktig
+- **Vokalfilter**: lyden «synger» a-e-i-o-u
+- **Plukket streng**: fysisk modell av en streng (kalimba, harpe, gitar-aktig)
+- **LFO**: wobble i takt (1/2 til 1/16) på filter, volum, tonehøyde eller vokal
+- **Pitch-envelope**: «zap» eller løft i starten av tonen
+
+Ord som *rar*, *glitch*, *alien* og *eksperimentell* gjør den villere. Hver gang blir oppskriften ny.
 
 Etterpå kan du fortsette å chatte: *«fetere»*, *«mørkere»*, *«mer luft»*, *«mindre reverb»*, *«uten delay»*,
 *«mer bass»*, *«kortere»*, *«ny variant»* eller *«kall den Sommer Keys»*. Står du på en vanlig lyd og skriver f.eks.

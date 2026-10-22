@@ -647,7 +647,7 @@ void ChatList::paint (juce::Graphics& g)
 
         g.setFont (uiFont (11.0f, true));
         g.setColour (c);
-        g.drawText ((m.edited ? utf8 ("OPPDATERT  \xc2\xb7  ") : utf8 ("NY LYD  \xc2\xb7  ")) + juce::String (hk::categoryName (m.kind)).toUpperCase(),
+        g.drawText ((m.edited ? utf8 ("OPPDATERT  \xc2\xb7  ") : m.scratch ? utf8 ("FRA BUNNEN  \xc2\xb7  ") : utf8 ("NY LYD  \xc2\xb7  ")) + juce::String (hk::categoryName (m.kind)).toUpperCase(),
                     (int) r.getX() + 22, (int) r.getY() + 16, 300, 14, juce::Justification::centredLeft);
         g.setFont (uiFont (22.0f, true));
         g.setColour (col::text);

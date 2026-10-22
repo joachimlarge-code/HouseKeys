@@ -366,7 +366,7 @@ void designFromWords (const juce::StringArray& w, hk::SoundDef& d, juce::StringA
         if (isVa) { va.semi2 = 12.0f; va.mix2 = std::max (va.mix2, 0.6f); }
         notes.add (u ("Oktav-stablet"));
     }
-    if (has ({ "sub", "808", "bunn", "bass" }) && ((at > 0 && isMoreLess (w[at - 1])) || w[at] != "bass"))
+    if (has ({ "sub", "808", "bunn", "bass" }) && ((at > 0 && isMoreLess (w[at - 1])) || w[at] == "sub" || w[at] == "808"))
     {
         const float i = intensityBefore (w, at);
         if (i < 0) { d.lowDb -= 3.0f; va.sub *= 0.5f; notes.add (u ("Mindre bunn")); }
@@ -425,6 +425,7 @@ hk::VaDef      blend (const hk::VaDef& a, const hk::VaDef& b, Mix& m)
     o.cutoff = geo (a.cutoff, b.cutoff); o.fD = geo (a.fD, b.fD); o.fR = geo (a.fR, b.fR); o.decayMs = geo (a.decayMs, b.decayMs);
     return o;
 }
+hk::StrDef     blend (const hk::StrDef& a, const hk::StrDef& b, Mix& m)   { auto o = a; HK_FIELDS_STR (HK_BX) return o; }
 hk::Params     blend (const hk::Params& a, const hk::Params& b, Mix& m)   { auto o = a; HK_FIELDS_PARAMS (HK_BX) return o; }
 #undef HK_BX
 
@@ -445,6 +446,7 @@ hk::SoundDef crossBreed (const hk::SoundDef& A, const hk::SoundDef& B, float t, 
     d.fm      = crossLayer (A.fm, B.fm, m, rnd);
     d.keys    = crossLayer (A.keys, B.keys, m, rnd);
     d.va      = crossLayer (A.va, B.va, m, rnd);
+    d.str     = crossLayer (A.str, B.str, m, rnd);
     if (d.sampler.level > 0)
     {
         d.fallback = A.sampler.level > 0 ? A.fallback : B.fallback;
@@ -799,6 +801,248 @@ Result generate (const juce::StringArray& w, const juce::String& request, juce::
     return res;
 }
 
+//==============================================================================
+// FROM SCRATCH: no factory sound involved. Picks the architecture (sources, oscillators, filter type,
+// modulation, envelopes, effects) inside musical rules for the role, then lets the words steer.
+bool wantsScratch (const juce::StringArray& w, const juce::String& text)
+{
+    const auto norm = " " + normalise (text) + " ";
+    return contains (w, { "bunn", "bunnen", "scratch", "unik", "unique", "eksperimentell", "experimental", "rar", "weird", "alien",
+                          "futuristisk", "futuristic", "ukjent", "sci", "romvesen", "robot", "glitch", "original" })
+        || norm.contains (" helt ny ") || norm.contains (" aldri hort ") || norm.contains (" ny synth ") || norm.contains (" egen synth ");
+}
+
+enum Role { kRoleChord, kRoleStab, kRolePluck, kRoleLead, kRolePad, kRoleBass, kRoleKeys };
+
+Result generateScratch (const juce::StringArray& w, const juce::String& request, juce::uint32 seed)
+{
+    juce::Random r ((juce::int64) seed);
+    auto uni = [&] (float lo, float hi) { return lo + (hi - lo) * r.nextFloat(); };
+    auto logUni = [&] (float lo, float hi) { return lo * std::pow (hi / lo, r.nextFloat()); };
+    auto chance = [&] (float p) { return r.nextFloat() < p; };
+    const bool wild = contains (w, { "rar", "weird", "alien", "eksperimentell", "experimental", "glitch", "romvesen", "robot", "sci", "futuristisk", "futuristic", "vill", "wild" });
+
+    //---- role
+    int role;
+    const auto kinds = mentionedKinds (w);
+    auto has = [&] (int c) { return std::find (kinds.begin(), kinds.end(), c) != kinds.end(); };
+    if (has (hk::kCatBass)) role = kRoleBass;
+    else if (has (hk::kCatLeads)) role = kRoleLead;
+    else if (has (hk::kCatPlucks)) role = kRolePluck;
+    else if (has (hk::kCatPads)) role = kRolePad;
+    else if (contains (w, { "stab", "stabs", "kort", "short" })) role = kRoleStab;
+    else if (has (hk::kCatRealPiano) || has (hk::kCatHousePiano) || has (hk::kCatDeepKeys) || has (hk::kCatRhodes)) role = kRoleKeys;
+    else if (has (hk::kCatSupersaw) || has (hk::kCatSynths)) role = kRoleChord;
+    else { static const int roles[] = { kRoleChord, kRoleChord, kRoleStab, kRolePluck, kRolePluck, kRoleLead, kRolePad, kRoleBass, kRoleKeys };
+           role = roles[r.nextInt ((int) std::size (roles))]; }
+
+    static const int kindOf[] = { hk::kCatSynths, hk::kCatSupersaw, hk::kCatPlucks, hk::kCatLeads, hk::kCatPads, hk::kCatBass, hk::kCatDeepKeys };
+    static const int refOf[]  = { hk::kPolySynth, hk::kSupersawStab, hk::kHousePluck, hk::kSawLead, hk::kWarmPad, hk::kHouseBass, hk::kDeepHouseKeys };
+    const int kind = kindOf[role];
+    const bool mono = role == kRoleBass || (role == kRoleLead && chance (0.85f));
+    const bool chordy = ! mono;
+
+    hk::SoundDef d;
+    d.name = ""; d.tag = ""; d.category = kind;
+    juce::StringArray parts;   // what was built, in Norwegian
+
+    //---- oscillators (the core of almost every design)
+    auto& va = d.va;
+    const bool useVa = ! (role == kRoleKeys && chance (0.3f)) && ! (role == kRolePluck && chance (0.25f));
+    if (useVa)
+    {
+        static const char* waveNo[] = { "sagtann", "firkant", "trekant", "sinus" };
+        auto pickWave = [&] { const float x = r.nextFloat(); return x < 0.38f ? hk::kSaw : x < 0.62f ? hk::kSquare : x < 0.82f ? hk::kTri : hk::kSine; };
+        va.level = 1.0f;
+        va.wave1 = pickWave();
+        va.wave2 = pickWave();
+        static const float safe[] = { 0.0f, 12.0f, -12.0f, 24.0f };
+        static const float any[]  = { 0.0f, 12.0f, -12.0f, 7.0f, 19.0f, 5.0f, 24.0f, -5.0f };
+        va.semi2 = (chordy && ! wild) ? safe[r.nextInt (4)] : any[r.nextInt (8)];
+        va.fine2 = uni (-14.0f, 14.0f);
+        va.mix2 = chance (0.8f) ? uni (0.25f, 1.0f) : 0.0f;
+        const int maxUni = role == kRoleBass ? 3 : 7;
+        va.unison = role == kRolePad || role == kRoleChord ? juce::jlimit (1, 7, 3 + r.nextInt (5)) : 1 + r.nextInt (maxUni);
+        va.detune = va.unison > 1 ? logUni (6.0f, role == kRoleBass ? 18.0f : 45.0f) : 0.0f;
+        va.spread = va.unison > 1 ? uni (0.4f, 1.0f) : 0.0f;
+        va.sub = role == kRoleBass ? uni (0.35f, 0.85f) : (chance (0.25f) ? uni (0.1f, 0.35f) : 0.0f);
+        va.noise = chance (wild ? 0.4f : 0.18f) ? uni (0.02f, 0.1f) : 0.0f;
+        va.velSens = uni (0.3f, 0.6f);
+        va.keytrack = uni (0.3f, 0.8f);
+        va.velAmt = uni (0.2f, 0.8f);
+        va.drift = uni (0.0f, 6.0f);
+        va.motion = chance (0.4f) ? uni (0.05f, 0.35f) : 0.0f;
+        va.poles = chance (0.6f) ? 4 : 2;
+
+        juce::String osc = juce::String (va.unison > 1 ? juce::String (va.unison) + " " : juce::String()) + u (waveNo[va.wave1]);
+        if (va.mix2 > 0)
+        {
+            const float st = va.semi2;
+            juce::String iv = st == 0 ? u ("") : st == 12 ? u (" en oktav opp") : st == -12 ? u (" en oktav ned") : st == 24 ? u (" to oktaver opp")
+                            : st == 7 || st == 19 ? u (" en kvint opp") : st == 5 ? u (" en kvart opp") : u (" en kvart ned");
+            osc << " + " << u (waveNo[va.wave2]) << iv;
+        }
+        parts.add (osc);
+
+        // filter
+        switch (role)
+        {
+            case kRoleBass:  va.cutoff = logUni (150.0f, 1200.0f); va.envAmt = uni (0.5f, 3.0f); va.fD = logUni (80.0f, 600.0f); va.fS = uni (0.0f, 0.4f); break;
+            case kRolePluck: va.cutoff = logUni (250.0f, 2500.0f); va.envAmt = uni (2.5f, 5.0f); va.fD = logUni (80.0f, 400.0f); va.fS = uni (0.0f, 0.15f); break;
+            case kRoleStab:  va.cutoff = logUni (500.0f, 4000.0f); va.envAmt = uni (1.0f, 3.5f); va.fD = logUni (100.0f, 500.0f); va.fS = uni (0.1f, 0.4f); break;
+            case kRoleLead:  va.cutoff = logUni (900.0f, 8000.0f); va.envAmt = uni (0.0f, 2.5f); va.fD = logUni (150.0f, 900.0f); va.fS = uni (0.3f, 0.8f); break;
+            case kRolePad:   va.cutoff = logUni (400.0f, 4000.0f); va.envAmt = uni (-0.5f, 1.5f); va.fA = logUni (5.0f, 1500.0f); va.fD = logUni (400.0f, 3000.0f); va.fS = uni (0.3f, 0.9f); break;
+            default:         va.cutoff = logUni (600.0f, 5000.0f); va.envAmt = uni (0.0f, 2.5f); va.fD = logUni (200.0f, 1200.0f); va.fS = uni (0.3f, 0.8f); break;
+        }
+        va.reso = chance (0.12f) ? uni (0.65f, 0.85f) : uni (0.0f, 0.45f);
+        va.fR = logUni (100.0f, 800.0f);
+        if (role != kRoleBass && chance (wild ? 0.3f : 0.12f)) { va.fType = 1; va.cutoff *= 1.6f; parts.add (u ("bandpass-filter")); }
+        else if (role != kRoleBass && chance (0.05f)) { va.fType = 2; va.cutoff = logUni (150.0f, 600.0f); parts.add (u ("highpass-filter")); }
+
+        // amp envelope
+        switch (role)
+        {
+            case kRolePluck: va.decayMs = logUni (140.0f, 600.0f); va.sustain = 0.0f; break;
+            case kRoleStab:  va.decayMs = logUni (250.0f, 900.0f); va.sustain = uni (0.0f, 0.25f); break;
+            case kRoleBass:  if (chance (0.5f)) { va.decayMs = logUni (250.0f, 900.0f); va.sustain = uni (0.2f, 0.7f); } break;
+            case kRoleKeys:  va.decayMs = logUni (500.0f, 2500.0f); va.sustain = uni (0.1f, 0.5f); break;
+            case kRoleChord: va.decayMs = logUni (600.0f, 2500.0f); va.sustain = uni (0.4f, 1.0f); break;
+            default: break;
+        }
+
+        // character blocks
+        if (chance (wild ? 0.55f : 0.25f)) { va.fold = uni (0.15f, wild ? 0.9f : 0.6f); parts.add ("wavefolder"); }
+        if (va.mix2 > 0 && chance (wild ? 0.45f : 0.15f)) { va.ring = uni (0.3f, 1.0f); parts.add (u ("ring-modulasjon")); }
+        if (chance (wild ? 0.4f : 0.16f)) { va.formant = uni (0.4f, 0.9f); va.vowel = r.nextFloat(); parts.add ("vokalfilter"); }
+        if (chance (wild ? 0.6f : 0.35f))
+        {
+            static const char* divNo[] = { "", "1/2", "1/4", "1/8", "1/16", "1/8T" };
+            if (chance (0.7f)) va.lfoDiv = 1 + r.nextInt (5); else va.lfoRate = logUni (0.2f, 7.0f);
+            juce::StringArray tg;
+            const float x = r.nextFloat();
+            if (x < 0.45f || role == kRoleBass) { va.lfoCut = uni (0.6f, 2.5f); tg.add ("filter"); }
+            else if (x < 0.65f && chordy) { va.lfoAmp = uni (0.25f, 0.6f); tg.add ("volum"); }
+            else if (x < 0.8f && va.formant > 0) { va.lfoVowel = uni (0.4f, 1.0f); tg.add ("vokal"); }
+            else { va.lfoPitch = uni (6.0f, 25.0f); tg.add ("tonehøyde"); }
+            if (va.formant > 0 && va.lfoVowel <= 0 && chance (0.5f)) { va.lfoVowel = uni (0.3f, 0.9f); tg.add ("vokal"); }
+            parts.add (u ("LFO ") + (va.lfoDiv > 0 ? u ("i takt (") + divNo[va.lfoDiv] + ")" : u ("fri")) + u (" p\xc3\xa5 ") + u (tg.joinIntoString (" og ").toRawUTF8()));
+        }
+        if ((role == kRoleBass && chance (0.35f)) || (role == kRolePluck && chance (0.25f)) || (role == kRoleLead && chance (0.2f)) || (wild && chance (0.3f)))
+        {
+            va.pEnvSemi = (chance (0.8f) ? 1.0f : -1.0f) * (chance (0.5f) ? 12.0f : uni (5.0f, 24.0f));
+            va.pEnvMs = logUni (10.0f, wild ? 400.0f : 90.0f);
+            parts.add (va.pEnvSemi > 0 ? u ("pitch-zap p\xc3\xa5 starten") : u ("pitch-l\xc3\xb8" "ft p\xc3\xa5 starten"));
+        }
+    }
+
+    //---- other sources
+    const bool keysWords = contains (w, { "piano", "flygel", "klaver" });
+    if (keysWords || (role == kRoleKeys && chance (0.35f)) || chance (0.04f))
+    {
+        d.sampler = hk::sounds()[(size_t) hk::kFreshHouse].sampler;
+        d.sampler.level = useVa ? uni (0.4f, 0.8f) : 1.0f;
+        d.sampler.octave = chance (0.4f) ? uni (0.2f, 0.5f) : 0.0f;
+        d.fallback = hk::sounds()[(size_t) hk::kFreshHouse].fallback; d.fallback.level = d.sampler.level;
+        parts.add (u ("ekte piano"));
+    }
+    if (! useVa || chance (role == kRoleKeys ? 0.5f : (role == kRoleBass ? 0.1f : 0.28f)))
+    {
+        static const float ra[] = { 0.5f, 1.0f, 1.0f, 2.0f, 3.0f, 4.0f };
+        static const float rb[] = { 1.0f, 2.0f, 3.5f, 5.0f, 7.0f, 9.0f, 14.0f };
+        auto& fm = d.fm;
+        fm.level = useVa ? uni (0.2f, 0.55f) : uni (0.7f, 1.0f);
+        fm.ratioA = ra[r.nextInt (6)]; fm.indexA = logUni (0.4f, wild ? 6.0f : 3.0f); fm.susA = uni (0.05f, 0.5f); fm.decA = logUni (0.1f, 2.0f);
+        fm.octB = chance (0.5f) ? 1.0f : 2.0f; fm.ratioB = rb[r.nextInt (7)]; fm.indexB = logUni (0.3f, 3.0f); fm.decB = logUni (0.05f, 1.2f);
+        fm.mixB = uni (0.1f, 0.6f); fm.feedback = chance (0.3f) ? uni (0.1f, 0.6f) : 0.0f;
+        fm.decay = role == kRolePluck || role == kRoleStab ? logUni (0.3f, 1.5f) : logUni (1.0f, 5.0f);
+        fm.sustain = role == kRolePad || role == kRoleLead ? uni (0.3f, 0.8f) : 0.0f;
+        fm.bark = chance (0.3f) ? uni (0.2f, 0.7f) : 0.0f;
+        parts.add (u ("FM-lag (") + juce::String (fm.ratioA, 1).trimCharactersAtEnd (".0") + ":" + juce::String (fm.ratioB, 1).trimCharactersAtEnd (".0") + ")");
+    }
+    if ((! useVa && d.fm.level <= 0) || chance (role == kRolePluck ? 0.45f : (role == kRoleBass ? 0.08f : 0.2f)))
+    {
+        auto& st = d.str;
+        st.level = useVa ? uni (0.3f, 0.7f) : uni (0.8f, 1.0f);
+        st.damp = uni (0.2f, 0.95f); st.pick = uni (0.3f, 1.0f);
+        st.decay = role == kRolePad || role == kRoleChord ? logUni (1.0f, 5.0f) : logUni (0.3f, 2.5f);
+        parts.add (u ("plukket streng"));
+    }
+    if (chance (role == kRoleKeys ? 0.3f : 0.07f))
+    {
+        d.organ.level = uni (0.2f, 0.5f);
+        for (auto& b : d.organ.bars) b = chance (0.55f) ? uni (0.2f, 1.0f) : 0.0f;
+        d.organ.bars[1] = std::max (d.organ.bars[1], 0.6f);
+        d.organ.decay = role == kRolePad ? 0.0f : uni (0.5f, 3.0f); d.organ.click = uni (0.0f, 0.4f);
+        parts.add (u ("orgel"));
+    }
+    if (d.va.level <= 0 && d.fm.level <= 0 && d.str.level <= 0 && d.sampler.level <= 0 && d.organ.level <= 0)
+    { d.str.level = 1.0f; parts.add (u ("plukket streng")); }
+
+    //---- play style and colour
+    d.mono = mono;
+    d.glideMs = mono ? (role == kRoleLead ? uni (25.0f, 120.0f) : (chance (0.4f) ? uni (20.0f, 70.0f) : 0.0f)) : 0.0f;
+    d.lowCutHz = role == kRoleBass ? 20.0f : logUni (60.0f, 220.0f);
+    d.lowDb = uni (-2.0f, 2.5f); d.highDb = uni (-3.0f, 2.5f);
+    d.drive = chance (0.4f) ? uni (0.1f, 0.5f) : 0.0f;
+    d.glue = uni (0.2f, 0.6f);
+    d.tape = chance (0.2f) ? uni (0.2f, 0.6f) : 0.0f;
+    d.gainDb = 0.0f;
+
+    auto& p = d.preset;
+    p = hk::Params {};
+    p.air = uni (0.2f, 0.65f);
+    p.attackMs = role == kRolePad ? logUni (60.0f, 700.0f) : uni (0.0f, 6.0f);
+    p.releaseS = role == kRolePad ? uni (1.0f, 3.0f) : role == kRolePluck ? uni (0.2f, 0.5f) : role == kRoleBass ? uni (0.08f, 0.2f)
+               : role == kRoleLead ? uni (0.15f, 0.4f) : uni (0.3f, 0.8f);
+    p.width = role == kRoleBass ? uni (0.3f, 0.5f) : uni (0.5f, 0.9f);
+    p.reverbOn = chance (role == kRoleBass ? 0.1f : role == kRolePad || role == kRolePluck ? 0.95f : 0.75f);
+    p.reverbMix = uni (0.12f, 0.35f); p.reverbSize = uni (0.3f, 0.85f);
+    p.delayOn = role != kRoleBass && chance (role == kRolePluck || role == kRoleLead ? 0.45f : 0.2f);
+    p.delayTime = 1 + r.nextInt (3); p.delayMix = uni (0.1f, 0.22f); p.delayFeedback = uni (0.25f, 0.45f);
+    p.chorusOn = chance (0.25f); p.chorusMix = uni (0.15f, 0.4f);
+    p.pumpOn = (role == kRoleChord || role == kRolePad || role == kRoleStab) && chance (0.35f); p.pumpDepth = uni (0.35f, 0.7f);
+    p.vibOn = role == kRoleLead && chance (0.2f); p.vibDepth = uni (0.15f, 0.35f);
+    p.chord = hk::kChordOff;
+    clampParams (p);
+
+    //---- the words steer the result
+    juce::StringArray notes, adjectives;
+    designFromWords (w, d, notes, adjectives);
+    std::map<juce::String, float> m;
+    Builder b { d.preset, m };
+    applyControls (w, b, notes);
+    writeParams (m, d.preset);
+    clampParams (d.preset);
+    codec::sanitise (d);
+    d.name = ""; d.tag = ""; d.category = kind;
+
+    Result res;
+    res.def = d;
+    res.kind = kind;
+    res.request = request;
+    res.levelSound = refOf[role];
+    res.hasSound = true;
+    res.scratch = true;
+    res.chips = describe (d);
+
+    static const char* future[] = { "Quantum", "Prism", "Nova", "Glitch", "Chrome", "Plasma", "Vapor", "Hyper", "Orbit", "Pulse",
+                                    "Mirage", "Flux", "Aurora", "Nebula", "Laser", "Crystal", "Static", "Halo", "Zero", "Spectra" };
+    juce::StringArray adj = adjectives;
+    if (adj.isEmpty() || chance (0.5f)) adj.add (future[r.nextInt ((int) std::size (future))]);
+    res.name = makeName (kind, adj, r);
+
+    static const char* roleNo[] = { "akkord-synth", "stab", "pluck", "lead", "pad", "bass", "keys" };
+    juce::String sTxt;
+    sTxt << u ("Her er **") << res.name << u ("** \xe2\x80\x93 en helt ny ") << u (roleNo[role])
+         << u (" bygget fra bunnen, uten noen ferdig lyd som utgangspunkt: ") << parts.joinIntoString (", ") << ".";
+    if (! notes.isEmpty()) sTxt << " " << u ("Tilpasset ordene dine: ") << joinNotes (notes) << ".";
+    sTxt << "\n" << pick (r, { "Trykk \xc2\xabNy variant\xc2\xbb for en helt annen oppskrift.",
+                                "Hver gang blir den forskjellig \xe2\x80\x93 trykk \xc2\xabNy variant\xc2\xbb for \xc3\xa5 lete videre.",
+                                "Skriv f.eks. \xc2\xab""fetere\xc2\xbb, \xc2\xabm\xc3\xb8rkere\xc2\xbb eller \xc2\xabmer pump\xc2\xbb for \xc3\xa5 justere." });
+    res.reply = sTxt;
+    return res;
+}
+
 // "kall den Sommer Keys" -> "Sommer Keys"
 juce::String renameTarget (const juce::String& text)
 {
@@ -853,7 +1097,20 @@ juce::StringArray describe (const hk::SoundDef& d)
         if (d.va.reso > 0.6f) c.add (u ("Acid-filter"));
         if (d.va.motion > 0.2f) c.add (u ("Bevegelse"));
         if (d.va.noise > 0.05f) c.add (u ("St\xc3\xb8y"));
+        if (d.va.fold > 0.05f) c.add ("Wavefolder");
+        if (d.va.ring > 0.05f) c.add ("Ring-mod");
+        if (d.va.fType == 1) c.add ("Bandpass");
+        if (d.va.fType == 2) c.add ("Highpass");
+        if (d.va.formant > 0.05f) c.add ("Vokalfilter");
+        if (d.va.lfoDiv > 0 || d.va.lfoRate > 0)
+        {
+            static const char* divs[] = { "", "1/2", "1/4", "1/8", "1/16", "1/8T" };
+            if (d.va.lfoCut > 0 || d.va.lfoAmp > 0 || d.va.lfoPitch > 0 || d.va.lfoVowel > 0)
+                c.add (d.va.lfoDiv > 0 ? u ("LFO ") + divs[juce::jlimit (1, 5, d.va.lfoDiv)] : u ("LFO"));
+        }
+        if (d.va.pEnvSemi != 0) c.add (d.va.pEnvSemi > 0 ? "Pitch-zap" : u ("Pitch-l\xc3\xb8" "ft"));
     }
+    if (d.str.level > 0) c.add ("Streng");
     if (d.mono) c.add (d.glideMs > 0 ? u ("Mono + glide") : u ("Mono"));
     if (d.tape > 0.3f) c.add ("Tape");
     if (d.drive > 0.35f || (d.preset.satOn && d.preset.satDrive > 0.2f)) c.add ("Drive");
@@ -914,7 +1171,7 @@ Result respond (const juce::String& text, const Context* current, juce::uint32 s
         const auto norm = " " + normalise (text) + " ";
         const bool variant = contains (w, { "variant", "versjon", "version", "another", "annen", "igjen", "again" })
                              || norm.contains (" en til ") || norm.contains (" one more ");
-        bool asksNew = ! mentionedKinds (w).empty() || contains (w, { "overrask", "surprise", "random", "tilfeldig" });
+        bool asksNew = ! mentionedKinds (w).empty() || contains (w, { "overrask", "surprise", "random", "tilfeldig" }) || wantsScratch (w, text);
         for (int i = 0; i < w.size(); ++i)
             if (w[i] == "lag" || w[i] == "make" || w[i] == "create" || w[i] == "ny" || w[i] == "new")
                 if (! (i + 1 < w.size() && (w[i + 1] == "den" || w[i + 1] == "det" || w[i + 1] == "it" || w[i + 1] == "lyden"
@@ -926,8 +1183,12 @@ Result respond (const juce::String& text, const Context* current, juce::uint32 s
             if (current->isFactory)
                 for (int i = 0; i < hk::kNumSounds; ++i) if (current->name == u (hk::sounds()[(size_t) i].name)) forced = i;
             auto req = current->request.isNotEmpty() ? current->request : current->name;
-            res = generate (words (req), req, seed, forced);
-            res.name = makeName (res.kind, {}, r);   // a variant gets its own name
+            if (wantsScratch (words (req), req)) { auto v = generateScratch (words (req), req, seed); v.reply = v.reply.fromFirstOccurrenceOf ("**", true, false); res = v; }
+            else
+            {
+                res = generate (words (req), req, seed, forced);
+                res.name = makeName (res.kind, {}, r);   // a variant gets its own name
+            }
             res.reply = pick (r, { "Her er en ny variant: **%N**.", "Ny vri: **%N**.", "Pr\xc3\xb8v denne: **%N**." }).replace ("%N", res.name)
                         + " " + res.reply.fromFirstOccurrenceOf ("\n", false, false);
             return res;
@@ -969,6 +1230,8 @@ Result respond (const juce::String& text, const Context* current, juce::uint32 s
             }
         }
     }
+    if (wantsScratch (w, text) || (contains (w, { "overrask", "surprise", "random", "tilfeldig" }) && r.nextFloat() < 0.6f))
+        return generateScratch (w, text.trim(), seed);
     return generate (w, text.trim(), seed, -1);
 }
 
@@ -1086,11 +1349,12 @@ juce::StringArray examples()
              u ("bred euforisk supersaw"),
              u ("tung acid bass"),
              u ("dr\xc3\xb8mmende pad med bjelle"),
+             u ("helt ny synth fra bunnen"),
              u ("overrask meg") };
 }
 
 juce::StringArray followUps()
 {
-    return { u ("Ny variant"), u ("Fetere"), u ("M\xc3\xb8rkere"), u ("Lysere"), u ("Mer luft"), u ("Mer pump"), u ("Kortere"), u ("Mer reverb") };
+    return { u ("Ny variant"), u ("\xe2\x9c\xa6 Fra bunnen"), u ("Fetere"), u ("M\xc3\xb8rkere"), u ("Lysere"), u ("Mer luft"), u ("Mer pump"), u ("Kortere"), u ("Mer reverb") };
 }
 } // namespace PresetAI

@@ -121,6 +121,24 @@ struct VaDef
     float drift = 2.0f;                             // analog pitch drift (cents)
     float motion = 0.0f;                            // slow random filter movement (octaves)
     float velSens = 0.45f;
+    // extra building blocks (all off by default; used by the AI's from-scratch designs)
+    float fold = 0.0f;                              // wavefolder 0..1 (metallic, growly)
+    float ring = 0.0f;                              // ring modulation osc1 x osc2 0..1
+    int   fType = 0;                                // filter: 0 low-pass, 1 band-pass, 2 high-pass
+    float formant = 0.0f, vowel = 0.0f;             // vowel filter mix 0..1, vowel a-e-i-o-u 0..1
+    float lfoRate = 0.0f;                           // free LFO in Hz (0 = off unless synced)
+    int   lfoDiv = 0;                               // tempo-synced LFO: 0 off, 1 = 1/2, 2 = 1/4, 3 = 1/8, 4 = 1/16, 5 = 1/8T
+    float lfoCut = 0.0f, lfoPitch = 0.0f, lfoVowel = 0.0f, lfoAmp = 0.0f;   // octaves, cents, 0..1, 0..1
+    float pEnvSemi = 0.0f, pEnvMs = 60.0f;          // pitch envelope: start offset (semitones) and decay time
+};
+
+// plucked string (Karplus-Strong)
+struct StrDef
+{
+    float level = 0.0f;
+    float damp = 0.5f;      // 0 dark .. 1 bright
+    float decay = 1.5f;     // seconds
+    float pick = 0.7f;      // excitation brightness
 };
 
 enum Category
@@ -147,6 +165,7 @@ struct SoundDef
     FmDef       fm;
     KeysDef     keys;
     VaDef       va;
+    StrDef      str;
     bool  mono = false;       // one note at a time (bass, leads)
     float glideMs = 0.0f;     // portamento between legato notes (mono sounds)
     float lowCutHz = 20.0f, lowDb = 0, highDb = 0, drive = 0, glue = 0.2f, tape = 0, gainDb = 0;

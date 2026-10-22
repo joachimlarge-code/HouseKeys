@@ -1,4 +1,4 @@
-# HouseKeys 3.7
+# HouseKeys 3.8
 
 Et house keys-instrument for FL Studio på Mac (VST3 og AU, Apple Silicon og Intel).
 Ekte samplet flygel, friske house-pianoer, Rhodes, pads, bass, plucks og synth-akkorder,
@@ -84,6 +84,21 @@ og lager **helt nye presets**:
    former lyden etter ordene dine og gir den et navn. Til slutt nivåtilpasses den, så den ikke er for høy eller lav.
 3. Lyden kommer som et kort i chatten: **▶ Spill** spiller en liten frase, **Lagre** legger den under **Mine lyder**,
    **Ny variant** lager en ny versjon av samme idé.
+
+### Ekte AI (gratis, med Groq)
+
+Den innebygde AI-en forstår bare enkeltord. For en **ekte språkmodell** som forstår vanlige setninger
+(*«en el-gitar lead som høres ut som 80-talls rock, men passer i house»*) og husker samtalen:
+
+1. Trykk **Koble til ekte AI (gratis)** øverst i chatten.
+2. Trykk **Åpne console.groq.com**, logg inn med Google eller e-post (gratis, ingen kredittkort).
+3. Trykk **Create API Key**, gi den et navn, trykk **Submit** og **Copy**.
+4. Lim nøkkelen inn i HouseKeys og trykk **Lagre og test**.
+
+Groq gir ca. 1000 meldinger om dagen gratis. AI-en (OpenAI gpt-oss-120b, med Llama 3.3 70B som reserve) får en
+fullstendig beskrivelse av alle byggeklossene i synthen og designer hele lyden selv. HouseKeys sjekker alle verdier
+og nivåtilpasser lyden. Nøkkelen lagres bare på din Mac. Hvis Groq ikke svarer (ikke internett, grensen nådd),
+bruker chatten den innebygde AI-en og sier fra om det.
 
 ### Fra bunnen: helt nye synther
 

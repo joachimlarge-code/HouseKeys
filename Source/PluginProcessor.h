@@ -78,6 +78,9 @@ public:
     bool saveChatSound (int index, juce::String& message);
     void chatVariant (int index);
     void clearChat();
+    juce::String getApiKey() const { return apiKey; }
+    void setApiKey (const juce::String& k) { apiKey = k.trim(); PresetAI::saveApiKey (apiKey); chatChanged.sendChangeMessage(); }
+    bool usesOnlineAi() const { return apiKey.isNotEmpty(); }
     void previewSound (int kind, bool mono) { previewRequest.store (kind | (mono ? 256 : 0)); }
     juce::ChangeBroadcaster chatChanged;
 
@@ -112,6 +115,7 @@ private:
         std::function<void()> fn;
     };
     std::unique_ptr<AiWorker> aiWorker;
+    juce::String apiKey = PresetAI::loadApiKey();
     std::atomic<int> previewRequest { -1 };
     int pvPos = -1, pvKind = 0;   // audio thread
     bool pvMono = false;

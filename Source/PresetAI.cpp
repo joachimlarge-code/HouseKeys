@@ -64,7 +64,7 @@ const std::map<int, std::vector<const char*>>& categoryNouns()
         { hk::kCatRhodes,     { "rhodes", "epiano", "elpiano", "wurli", "electric" } },
         { hk::kCatSupersaw,   { "supersaw", "chord", "chords", "akkord", "akkorder", "stab", "stabs", "trance" } },
         { hk::kCatSynths,     { "synth", "synther", "poly", "brass", "juno", "strings", "strykere" } },
-        { hk::kCatLeads,      { "lead", "leads", "melodi", "melody", "sagtann" } },
+        { hk::kCatLeads,      { "lead", "leads", "melodi", "melody", "sagtann", "gitar", "guitar", "elgitar", "floyte", "flute", "solo" } },
         { hk::kCatPads,       { "pad", "pads", "flate", "ambient", "atmosfaere", "bakgrunn" } },
         { hk::kCatBass,       { "bass", "basslinje", "bassline", "808" } },
         { hk::kCatPlucks,     { "pluck", "plucks", "plukk", "arp", "arpeggio" } },
@@ -389,6 +389,31 @@ void designFromWords (const juce::StringArray& w, hk::SoundDef& d, juce::StringA
     if (has ({ "mono", "legato", "glide", "portamento" })) { d.mono = true; d.glideMs = std::max (d.glideMs, 60.0f); notes.add (u ("Mono med glide")); }
     if (has ({ "poly", "akkorder" }) && d.mono && ! has ({ "bass", "lead" })) { d.mono = false; d.glideMs = 0; notes.add (u ("Polyfon (spiller akkorder)")); }
     if (has ({ "bevegelse", "movement", "levende", "evolving" }) && isVa) { va.motion = 0.35f; notes.add (u ("Langsom filterbevegelse")); }
+    if (has ({ "gitar", "guitar", "elgitar", "strat", "rock" }))
+    {
+        if (! isVa) { va = hk::sounds()[(size_t) hk::kSawLead].va; va.level = 0.7f; }
+        va.wave1 = hk::kSaw; va.unison = std::min (2, std::max (1, va.unison)); va.detune = std::min (va.detune, 10.0f);
+        va.fold = std::max (va.fold, 0.6f); va.cutoff = juce::jlimit (2500.0f, 4500.0f, va.cutoff); va.reso = std::min (va.reso, 0.2f);
+        va.envAmt = std::min (va.envAmt, 1.5f); va.decayMs = 0.0f; va.sustain = 1.0f;
+        d.str.level = std::max (d.str.level, 0.5f); d.str.damp = 0.7f; d.str.decay = 2.0f; d.str.pick = 0.9f;
+        d.drive = std::max (d.drive, 0.6f);
+        d.preset.satOn = true; d.preset.satDrive = std::max (d.preset.satDrive, 0.55f);
+        d.preset.vibOn = true; d.preset.vibDepth = 0.2f; d.preset.vibRate = 5.5f;
+        notes.add (u ("Gitar-karakter (vreng med wavefolder og drive, plukket streng i anslaget, vibrato)")); adjectives.add ("Strat");
+    }
+    if (has ({ "floyte", "flute", "fløyte", "whistle", "plystre" }))
+    {
+        if (! isVa) { va = hk::sounds()[(size_t) hk::kSawLead].va; va.level = 0.8f; }
+        va.wave1 = hk::kSine; va.wave2 = hk::kTri; va.mix2 = 0.3f; va.semi2 = 12.0f; va.unison = 1; va.noise = 0.07f;
+        va.cutoff = 3500.0f; va.reso = 0.05f; va.envAmt = 0.3f; va.fold = 0.0f;
+        d.preset.attackMs = std::max (d.preset.attackMs, 40.0f); d.preset.vibOn = true; d.preset.vibDepth = 0.15f;
+        notes.add (u ("Fl\xc3\xb8yte-karakter (sinus med pust og vibrato)")); adjectives.add ("Breath");
+    }
+    if (has ({ "kor", "choir", "vokal", "vocal", "stemme", "voice", "synger" }) && isVa)
+    {
+        va.formant = std::max (va.formant, 0.7f); va.vowel = 0.6f;
+        notes.add (u ("Vokalfilter som synger \xc2\xab""o\xc2\xbb")); adjectives.add ("Choir");
+    }
     if (has ({ "luftig", "luft", "airy", "fresh", "frisk" })) adjectives.add ("Airy");
     if (has ({ "drommende", "dreamy", "ambient" })) adjectives.add ("Dream");
     if (has ({ "pump", "pumpende", "pumping", "sidechain" })) adjectives.add ("Pumping");
@@ -788,7 +813,7 @@ Result generate (const juce::StringArray& w, const juce::String& request, juce::
 
     //---- 5. what the AI says
     juce::String s;
-    s << pick (r, { "Her er **%N** \xe2\x80\x93 en helt ny %K.", "Ferdig! **%N** er en ny %K designet fra bunnen.",
+    s << pick (r, { "Her er **%N** \xe2\x80\x93 en helt ny %K.", "Ferdig! **%N** er en ny %K.",
                     "Jeg har bygget **%N**, en ny %K.", "Sjekk **%N** \xe2\x80\x93 en fersk %K." });
     if (A != B) s << " " << u ("Den er en krysning av ") << u (pa.name) << " og " << u (pb.name);
     else s << " " << u ("Den bygger p\xc3\xa5 ") << u (pa.name);
@@ -923,9 +948,9 @@ Result generateScratch (const juce::StringArray& w, const juce::String& request,
             if (x < 0.45f || role == kRoleBass) { va.lfoCut = uni (0.6f, 2.5f); tg.add ("filter"); }
             else if (x < 0.65f && chordy) { va.lfoAmp = uni (0.25f, 0.6f); tg.add ("volum"); }
             else if (x < 0.8f && va.formant > 0) { va.lfoVowel = uni (0.4f, 1.0f); tg.add ("vokal"); }
-            else { va.lfoPitch = uni (6.0f, 25.0f); tg.add ("tonehøyde"); }
+            else { va.lfoPitch = uni (6.0f, 25.0f); tg.add (u ("toneh\xc3\xb8yde")); }
             if (va.formant > 0 && va.lfoVowel <= 0 && chance (0.5f)) { va.lfoVowel = uni (0.3f, 0.9f); tg.add ("vokal"); }
-            parts.add (u ("LFO ") + (va.lfoDiv > 0 ? u ("i takt (") + divNo[va.lfoDiv] + ")" : u ("fri")) + u (" p\xc3\xa5 ") + u (tg.joinIntoString (" og ").toRawUTF8()));
+            parts.add (u ("LFO ") + (va.lfoDiv > 0 ? u ("i takt (") + divNo[va.lfoDiv] + ")" : u ("fri")) + u (" p\xc3\xa5 ") + tg.joinIntoString (" og "));
         }
         if ((role == kRoleBass && chance (0.35f)) || (role == kRolePluck && chance (0.25f)) || (role == kRoleLead && chance (0.2f)) || (wild && chance (0.3f)))
         {
@@ -1272,7 +1297,7 @@ static double measureDb (const hk::SoundDef& def, int kind, const hk::SampleBank
     constexpr int sr = 44100, blockSize = 256;
     hk::SoundDef d = def;
     hk::Params p = d.preset;
-    p.sound = hk::kAiSound; p.volumeDb = -3.0f; p.chord = hk::kChordOff;
+    p.sound = hk::kAiSound; p.volumeDb = -3.0f;   // chord stays: a chord preset is measured as it plays
     auto eng = std::make_unique<hk::Engine>();
     eng->setCustomSound (&d);
     eng->setSampleBank (bank);
@@ -1356,5 +1381,300 @@ juce::StringArray examples()
 juce::StringArray followUps()
 {
     return { u ("Ny variant"), u ("\xe2\x9c\xa6 Fra bunnen"), u ("Fetere"), u ("M\xc3\xb8rkere"), u ("Lysere"), u ("Mer luft"), u ("Mer pump"), u ("Kortere"), u ("Mer reverb") };
+}
+} // namespace PresetAI
+
+//==============================================================================
+// ONLINE AI (Groq, OpenAI-compatible chat completions)
+namespace PresetAI
+{
+namespace
+{
+int kindFromString (const juce::String& k, int fallback)
+{
+    const auto s = k.toLowerCase().removeCharacters (" -_");
+    if (s.contains ("housepiano")) return hk::kCatHousePiano;
+    if (s.contains ("piano") || s.contains ("grand")) return hk::kCatRealPiano;
+    if (s.contains ("rhodes") || s.contains ("epiano")) return hk::kCatRhodes;
+    if (s.contains ("keys") || s.contains ("organ") || s.contains ("orgel")) return hk::kCatDeepKeys;
+    if (s.contains ("supersaw") || s.contains ("chord") || s.contains ("stab")) return hk::kCatSupersaw;
+    if (s.contains ("lead")) return hk::kCatLeads;
+    if (s.contains ("pad")) return hk::kCatPads;
+    if (s.contains ("bass")) return hk::kCatBass;
+    if (s.contains ("pluck") || s.contains ("arp")) return hk::kCatPlucks;
+    if (s.contains ("synth")) return hk::kCatSynths;
+    return fallback;
+}
+
+int referenceFor (int kind)
+{
+    switch (kind)
+    {
+        case hk::kCatRealPiano:  return hk::kConcertGrand;
+        case hk::kCatHousePiano: return hk::kFreshHouse;
+        case hk::kCatDeepKeys:   return hk::kDeepHouseKeys;
+        case hk::kCatRhodes:     return hk::kWarmRhodes;
+        case hk::kCatSupersaw:   return hk::kSupersawChords;
+        case hk::kCatLeads:      return hk::kSawLead;
+        case hk::kCatPads:       return hk::kWarmPad;
+        case hk::kCatBass:       return hk::kHouseBass;
+        case hk::kCatPlucks:     return hk::kHousePluck;
+        default:                 return hk::kPolySynth;
+    }
+}
+
+// the model sometimes writes names instead of numbers ("saw", "bandpass", "1/8")
+void normaliseEnums (juce::var& sound)
+{
+    auto* va = sound.getProperty ("va", {}).getDynamicObject();
+    if (va == nullptr) return;
+    auto wave = [] (const juce::var& v) -> juce::var
+    {
+        if (! v.isString()) return v;
+        const auto s = v.toString().toLowerCase();
+        if (s.contains ("saw")) return 0; if (s.contains ("sq") || s.contains ("pulse")) return 1;
+        if (s.contains ("tri")) return 2; if (s.contains ("sin")) return 3;
+        return v.toString().getIntValue();
+    };
+    for (auto* k : { "wave1", "wave2" }) if (va->hasProperty (k)) va->setProperty (k, wave (va->getProperty (k)));
+    if (va->hasProperty ("fType") && va->getProperty ("fType").isString())
+    {
+        const auto s = va->getProperty ("fType").toString().toLowerCase();
+        va->setProperty ("fType", s.contains ("band") ? 1 : s.contains ("high") ? 2 : 0);
+    }
+    if (va->hasProperty ("lfoDiv") && va->getProperty ("lfoDiv").isString())
+    {
+        const auto s = va->getProperty ("lfoDiv").toString().removeCharacters (" ").toLowerCase();
+        const int d = s == "1/2" ? 1 : s == "1/4" ? 2 : s == "1/8" ? 3 : s == "1/16" ? 4 : s.contains ("t") ? 5 : s.getIntValue();
+        va->setProperty ("lfoDiv", d);
+    }
+}
+
+// the current sound, compact: only layers that are in use, numbers rounded
+juce::var compactSound (const hk::SoundDef& d)
+{
+    auto v = codec::toVar (d);
+    if (auto* o = v.getDynamicObject())
+    {
+        o->removeProperty ("category");
+        for (auto* layer : { "sampler", "organ", "fm", "keys", "va", "str" })
+            if ((float) o->getProperty (layer).getProperty ("level", 0.0f) <= 0.0f) o->removeProperty (layer);
+    }
+    std::function<void (juce::var&)> round = [&] (juce::var& x)
+    {
+        if (auto* obj = x.getDynamicObject())
+            for (auto& p : obj->getProperties())
+            {
+                auto val = p.value;
+                if (val.isDouble()) obj->setProperty (p.name, std::round ((double) val * 1000.0) / 1000.0);
+                else if (val.isObject()) round (val);
+            }
+    };
+    round (v);
+    return v;
+}
+} // namespace
+
+juce::String buildSystemPrompt()
+{
+    return juce::String::fromUTF8 (R"PROMPT(You are the sound designer inside HouseKeys, a synth plugin for house music in FL Studio. The user chats in Norwegian (sometimes English) and is not technical. You design or edit sounds by writing the synth patch as JSON.
+
+Return ONLY one JSON object:
+{"action":"new|edit|rename|chat","kind":"piano|housepiano|keys|rhodes|supersaw|synth|lead|pad|bass|pluck","name":"catchy 2-3 word English preset name","reply":"1-3 short, friendly sentences in simple Norwegian saying what you made and how it is built; put the name in **bold**","sound":{...}}
+- new: the user wants a new sound. "sound" is a complete patch with every layer you use. Unused layers can be left out (they are off).
+- edit: the user wants to change the current sound ("fetere", "mer luft", "mindre reverb", "mer gitar-aktig"). "sound" contains ONLY the fields you change. Keep the name unless asked.
+- rename: the user gives a new name. Set "name", no "sound".
+- chat: questions or small talk. Only "reply" (answer in Norwegian, short).
+Do exactly what the user asks: an "el-gitar lead" must be a lead that sounds like an electric guitar, never a bass. Be bold and specific; every new sound should be clearly different from the last one.
+
+THE SYNTH (all layers are mixed; a layer with level 0 is off)
+sound.va = virtual analog: level 0..1.5, wave1 and wave2 (0 saw, 1 square, 2 triangle, 3 sine), semi2 -24..24 (osc2 interval, semitones), fine2 cents, mix2 0..1.5 (osc2 level), unison 1..7, detune 0..60 cents, spread 0..1, sub 0..1 (sine one octave down), noise 0..0.5, cutoff 40..18000 Hz, reso 0..0.95, poles 2|4, fType 0 lowpass|1 bandpass|2 highpass, envAmt -2..6 (filter envelope, octaves), fA fD fR ms, fS 0..1, keytrack 0..1, velAmt 0..2, decayMs (0 = holds while key is down, else amp decay time ms) with sustain 0..1, drift 0..15 cents, motion 0..1 (slow filter wander), velSens 0..1,
+  fold 0..1 wavefolder (gritty, metallic, overdriven guitar-like edge), ring 0..1 ring modulation osc1 x osc2 (bells, robots; needs mix2 > 0), formant 0..1 + vowel 0..1 (vocal filter a-e-i-o-u),
+  LFO: lfoDiv 0 off | 1 = 1/2 | 2 = 1/4 | 3 = 1/8 | 4 = 1/16 | 5 = 1/8 triplet (tempo-synced) or lfoRate Hz (free); targets lfoCut (octaves 0..4, wobble), lfoPitch (cents 0..100), lfoAmp 0..1 (tremolo), lfoVowel 0..1,
+  pEnvSemi -48..48 with pEnvMs 1..2000 (pitch envelope: zap or drop at the start of each note).
+sound.str = plucked string, physical model: level 0..1.5, damp 0..1 (0 dark, 1 bright), decay 0.05..10 s, pick 0..1 (attack brightness). Guitar, harp, kalimba, koto, plucky attacks.
+sound.fm = FM (electric piano, bells, metallic): level 0..1.5, ratioA 0.25..16, indexA 0..8, susA 0..1, decA s, octB 0.25..4, ratioB 0.25..20, indexB 0..8, decB s, susB 0..1, mixB 0..1, feedback 0..1, decay s, sustain 0..1, bark 0..1 (Rhodes growl).
+sound.organ = drawbar organ: level 0..1.5, bars [16', 8', 4', 2 2/3', 2'] each 0..1, decay s (0 = sustains), click 0..1.
+sound.sampler = a real recorded grand piano: level 0..1.5, octave 0..1 (extra piano an octave up = the classic fat house piano), dynamics 0..30 dB.
+sound.keys = additive house keys (rarely needed): level, tilt, kc, odd, h2, h3, tau, bright, sus, tauS, detune, spread.
+Whole sound: mono true|false (one note at a time, legato: bass and most leads), glideMs 0..1000, lowCutHz 20..600, lowDb and highDb -12..12 (shelf EQ), drive 0..1, glue 0..1 (compression), tape 0..1 (lo-fi wobble).
+sound.params = the plugin knobs (reset when the sound loads): tone 0..1 (0.5 neutral), air 0..1, attackMs 0..2000, decay 0..1 (0.5 natural, scales all decays), releaseS 0.01..6, width 0..1, volumeDb -3, chord 0, filterOn cutoffHz resonance (extra master filter), satOn satDrive 0..1, chorusOn chorusMix, delayOn delayTime (0 1/16, 1 1/8, 2 3/16, 3 1/4, 4 3/8, 5 1/2) delayFeedback delayMix, reverbOn reverbMix reverbSize, pumpOn pumpDepth pumpRate (0 1/4, 1 1/8, 2 1/16), vibOn vibRate Hz vibDepth 0..1.
+
+RECIPES (starting points, vary them)
+Electric guitar lead: va saw (or square), unison 1-2, detune 8, fold 0.5-0.8, drive 0.6, cutoff 2500-4500, reso 0.15, poles 2, mono true, glideMs 40-80, str level 0.5 damp 0.7 decay 2 (pick attack), params satOn true satDrive 0.5-0.7, vibOn true vibDepth 0.2 vibRate 5.5, delayOn delayTime 3, reverb small.
+Flute/whistle: sine or triangle, noise 0.05-0.1, cutoff 3000, attackMs 40, vibOn. Brass: saw, unison 2-3, envAmt 2-3, fA 40-80, fS 0.5. Strings: saw, unison 5-7, detune 20, attackMs 300, releaseS 1.5.
+Bass: mono true, sub 0.4-0.8, cutoff 200-1200, lowCutHz 20, reverb off, width 0.3. Pad: attackMs 200-1500, releaseS 1.5-4, unison 5-7, reverb on. Pluck: decayMs 150-500, sustain 0, envAmt 3+. Supersaw chords: saw, unison 7, detune 30-40, spread 1, mix2 0.5 fine2 9, pumpOn.
+House piano: sampler level 1, octave 0.3-0.5. Rhodes: fm ratioA 1 indexA 1.5 ratioB 14 indexB 0.8 decB 0.06 mixB 0.35 bark 0.3 decay 3.
+For chord sounds keep osc2 at 0 or +-12 semitones. Loudness is matched automatically; keep volumeDb at -3.)PROMPT");
+}
+
+Result parseOnline (const juce::String& content, const juce::String& userText, const Context* current, bool& ok, juce::String& error)
+{
+    ok = false;
+    Result res;
+    const int a = content.indexOfChar ('{'), z = content.lastIndexOfChar ('}');
+    auto j = (a >= 0 && z > a) ? juce::JSON::parse (content.substring (a, z + 1)) : juce::var();
+    if (! j.isObject()) { error = juce::String::fromUTF8 ("uventet svar fra AI-en"); return res; }
+
+    const auto action = j.getProperty ("action", "new").toString().toLowerCase();
+    res.reply = j.getProperty ("reply", "").toString().trim();
+    res.fromLlm = true;
+
+    if (action == "chat")
+    {
+        if (res.reply.isEmpty()) { error = juce::String::fromUTF8 ("tomt svar"); return res; }
+        ok = true;
+        return res;
+    }
+    if (action == "rename")
+    {
+        if (current == nullptr) { error = u ("ingen lyd \xc3\xa5 gi nytt navn"); return res; }
+        res.renamed = true; res.hasSound = true;
+        res.def = current->def; res.kind = current->kind; res.request = current->request;
+        res.name = j.getProperty ("name", current->name).toString().trim().substring (0, 40);
+        res.chips = describe (res.def);
+        if (res.reply.isEmpty()) res.reply = juce::String::fromUTF8 ("N\xc3\xa5 heter den **") + res.name + "**.";
+        ok = true;
+        return res;
+    }
+
+    const bool edit = action == "edit" && current != nullptr;
+    hk::SoundDef d;
+    if (edit) d = current->def;
+    else { d = hk::SoundDef {}; d.preset = hk::Params {}; }
+    auto sound = j.getProperty ("sound", {});
+    if (sound.isObject())
+    {
+        normaliseEnums (sound);
+        codec::fromVar (sound, d);   // merges present fields and keeps every value inside its range
+    }
+    else if (! edit) { error = juce::String::fromUTF8 ("AI-en sendte ingen lyd"); return res; }
+
+    if (d.va.level <= 0 && d.fm.level <= 0 && d.str.level <= 0 && d.sampler.level <= 0 && d.organ.level <= 0 && d.keys.level <= 0)
+    {
+        d.va.level = 1.0f;   // never a silent patch
+        d.va.unison = std::max (1, d.va.unison);
+    }
+    if (d.sampler.level > 0)
+    {
+        const auto& fresh = hk::sounds()[(size_t) hk::kFreshHouse];
+        const float lvl = d.sampler.level, oct = d.sampler.octave;
+        if (! edit || current->def.sampler.level <= 0) { d.sampler = fresh.sampler; d.sampler.level = lvl; d.sampler.octave = oct; }
+        d.fallback = fresh.fallback; d.fallback.level = d.sampler.level;
+    }
+    // chords only when asked for
+    if (! contains (words (userText), { "akkord", "chord", "min7", "maj7", "min9", "maj9", "sus" })) d.preset.chord = hk::kChordOff;
+    d.preset.smpMode = 0;
+    d.preset.volumeDb = edit ? juce::jlimit (-12.0f, 3.0f, d.preset.volumeDb) : -3.0f;
+    clampParams (d.preset);
+    codec::sanitise (d);
+    d.name = ""; d.tag = "";
+    if (! edit) d.gainDb = 0.0f;
+
+    res.kind = kindFromString (j.getProperty ("kind", "").toString(), edit ? current->kind : (d.mono ? hk::kCatLeads : hk::kCatSynths));
+    d.category = res.kind;
+    res.def = d;
+    res.hasSound = true;
+    res.scratch = ! edit;
+    res.levelSound = edit ? -1 : referenceFor (res.kind);
+    res.request = edit ? current->request + " " + userText : userText;
+    res.name = j.getProperty ("name", "").toString().trim().substring (0, 40);
+    if (res.name.isEmpty()) res.name = edit ? current->name : juce::String ("AI Sound");
+    if (edit && ! current->isFactory && ! j.hasProperty ("name")) res.name = current->name;
+    res.chips = describe (d);
+    if (res.reply.isEmpty()) res.reply = "**" + res.name + "**";
+    else if (! res.reply.contains ("**")) res.reply = "**" + res.name + u ("** \xe2\x80\x93 ") + res.reply;
+    ok = true;
+    return res;
+}
+
+Result askOnline (const juce::String& text, const Context* current, const std::vector<Turn>& history,
+                  const juce::String& apiKey, bool& ok, juce::String& error)
+{
+    ok = false;
+    juce::Array<juce::var> messages;
+    auto msg = [] (const char* role, const juce::String& content)
+    {
+        juce::DynamicObject::Ptr m = new juce::DynamicObject();
+        m->setProperty ("role", role);
+        m->setProperty ("content", content);
+        return juce::var (m.get());
+    };
+    messages.add (msg ("system", buildSystemPrompt()));
+    const size_t first = history.size() > 8 ? history.size() - 8 : 0;
+    for (size_t i = first; i < history.size(); ++i)
+        messages.add (msg (history[i].user ? "user" : "assistant", history[i].text.substring (0, 600)));
+
+    juce::String last;
+    if (current != nullptr)
+        last << "CURRENT SOUND \"" << current->name << "\" (kind " << hk::categoryName (current->kind) << "):\n"
+             << juce::JSON::toString (compactSound (current->def), true) << "\n\n";
+    else
+        last << "There is no current sound yet.\n\n";
+    last << "USER: " << text << "\nAnswer with the JSON object.";
+    messages.add (msg ("user", last));
+
+    struct Model { const char* id; bool reasoning; };
+    const Model models[] = { { "openai/gpt-oss-120b", true }, { "llama-3.3-70b-versatile", false }, { "openai/gpt-oss-20b", true } };
+    juce::String lastError;
+    for (auto& m : models)
+    {
+        juce::DynamicObject::Ptr body = new juce::DynamicObject();
+        body->setProperty ("model", m.id);
+        body->setProperty ("messages", messages);
+        body->setProperty ("temperature", 0.9);
+        body->setProperty ("max_completion_tokens", 4000);
+        juce::DynamicObject::Ptr fmt = new juce::DynamicObject();
+        fmt->setProperty ("type", "json_object");
+        body->setProperty ("response_format", juce::var (fmt.get()));
+        if (m.reasoning) body->setProperty ("reasoning_effort", "low");
+
+        int status = 0;
+        const auto url = juce::URL ("https://api.groq.com/openai/v1/chat/completions")
+                             .withPOSTData (juce::JSON::toString (juce::var (body.get()), true));
+        auto stream = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inPostData)
+                                                 .withExtraHeaders ("Authorization: Bearer " + apiKey.trim() + "\r\n"
+                                                                    "Content-Type: application/json")
+                                                 .withConnectionTimeoutMs (60000)
+                                                 .withStatusCode (&status));
+        if (stream == nullptr) { error = juce::String::fromUTF8 ("ingen internett-forbindelse"); return {}; }
+        const auto replyText = stream->readEntireStreamAsString();
+        if (status == 401 || status == 403) { error = juce::String::fromUTF8 ("API-n\xc3\xb8kkelen ble ikke godtatt"); return {}; }
+        if (status != 200)
+        {
+            lastError = status == 429 ? juce::String::fromUTF8 ("dagens gratisgrense hos Groq er n\xc3\xa5""dd") : "HTTP " + juce::String (status);
+            continue;   // next model has its own limits
+        }
+        const auto reply = juce::JSON::parse (replyText);
+        juce::String content;
+        if (auto* choices = reply.getProperty ("choices", {}).getArray(); choices != nullptr && ! choices->isEmpty())
+            content = (*choices)[0].getProperty ("message", {}).getProperty ("content", "").toString();
+        bool parsed = false;
+        auto r = parseOnline (content, text, current, parsed, lastError);
+        if (parsed) { ok = true; return r; }
+    }
+    error = lastError.isNotEmpty() ? lastError : juce::String ("ukjent feil");
+    return {};
+}
+
+static juce::File aiSettingsFile()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+             .getChildFile ("Application Support").getChildFile ("HouseKeys").getChildFile ("settings.xml");
+}
+
+juce::String loadApiKey()
+{
+    if (auto xml = juce::XmlDocument::parse (aiSettingsFile())) return xml->getStringAttribute ("groqApiKey");
+    return {};
+}
+
+void saveApiKey (const juce::String& key)
+{
+    auto f = aiSettingsFile();
+    f.getParentDirectory().createDirectory();
+    juce::XmlElement xml ("HouseKeysSettings");
+    xml.setAttribute ("groqApiKey", key.trim());
+    xml.writeTo (f);
 }
 } // namespace PresetAI

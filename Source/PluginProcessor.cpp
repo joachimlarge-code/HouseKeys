@@ -294,11 +294,34 @@ void HouseKeysProcessor::sendChat (const juce::String& rawText)
 
     const auto seed = (juce::uint32) juce::Random::getSystemRandom().nextInt();
     auto flag = alive;
+
+    // the conversation so far, for the online AI (without the message just added)
+    std::vector<PresetAI::Turn> history;
+    for (size_t i = 0; i + 1 < chat.size(); ++i)
+    {
+        const auto& m = chat[i];
+        history.push_back ({ m.fromUser, m.fromUser ? m.text : m.text + (m.hasSound ? " [sound: " + m.name + "]" : juce::String()) });
+    }
+    const auto key = apiKey;
+
     if (aiWorker != nullptr) aiWorker->stopThread (5000);   // the previous answer is already done (aiBusy guards)
-    aiWorker = std::make_unique<AiWorker> ([this, flag, ctx, text, seed]
+    aiWorker = std::make_unique<AiWorker> ([this, flag, ctx, text, seed, history, key]
     {
         const auto start = juce::Time::getMillisecondCounter();
-        auto r = PresetAI::respond (text, ctx.get(), seed);
+        PresetAI::Result r;
+        bool done = false;
+        if (key.isNotEmpty())
+        {
+            juce::String why;
+            r = PresetAI::askOnline (text, ctx.get(), history, key, done, why);
+            if (! done)
+            {
+                r = PresetAI::respond (text, ctx.get(), seed);
+                r.reply = juce::String::fromUTF8 ("(Groq svarte ikke: ") + why + juce::String::fromUTF8 (" \xe2\x80\x93 brukte innebygd AI.)\n") + r.reply;
+            }
+            done = true;
+        }
+        if (! done) r = PresetAI::respond (text, ctx.get(), seed);
         if (r.hasSound) PresetAI::autoLevel (r, SampleLibrary::get(), ctx.get());
         const auto took = juce::Time::getMillisecondCounter() - start;
         if (took < 700) juce::Thread::sleep ((int) (700 - took));   // let the "typing" dots show

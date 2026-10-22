@@ -29,6 +29,7 @@ namespace PresetAI
         bool hasSound = false;
         bool renamed = false;       // only the name changed
         bool scratch = false;       // designed from scratch (no factory sound)
+        bool fromLlm = false;       // made by the online AI (Groq)
         juce::String reply;         // what the AI says (supports **bold**)
         juce::StringArray chips;    // what is in the sound (layers, effects)
         hk::SoundDef def;
@@ -40,6 +41,17 @@ namespace PresetAI
     };
 
     Result respond (const juce::String& text, const Context* current, juce::uint32 seed);
+
+    // The real AI: a large language model on Groq (free API key, ~1000 requests a day).
+    // Runs synchronously (call it from a worker thread). ok = false -> use respond() instead; error says why.
+    struct Turn { bool user; juce::String text; };
+    Result askOnline (const juce::String& text, const Context* current, const std::vector<Turn>& history,
+                      const juce::String& apiKey, bool& ok, juce::String& error);
+    Result parseOnline (const juce::String& json, const juce::String& userText, const Context* current, bool& ok, juce::String& error);
+    juce::String buildSystemPrompt();
+
+    juce::String loadApiKey();
+    void saveApiKey (const juce::String& key);
 
     // match loudness against the reference (parentA, or the previous version when editing)
     void autoLevel (Result& r, const hk::SampleBank* bank, const Context* previous);

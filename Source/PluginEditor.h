@@ -141,6 +141,26 @@ private:
     int hover = -1;
 };
 
+// Settings card for the free online AI (Groq key)
+class AiKeyPanel : public juce::Component
+{
+public:
+    explicit AiKeyPanel (HouseKeysProcessor&);
+    void open();
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    std::function<void()> onClose;
+
+private:
+    void save();
+    HouseKeysProcessor& proc;
+    juce::TextEditor key;
+    juce::TextButton openSite, saveButton, removeButton, closeButton;
+    juce::String status;
+    juce::Colour statusColour;
+    juce::Rectangle<int> card;
+};
+
 // AI chat panel: header, messages, suggestions and the message box
 class ChatPanel : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
@@ -175,8 +195,9 @@ private:
     juce::TextEditor input;
     SendButton sendButton;
     std::vector<std::pair<juce::Rectangle<int>, juce::String>> chips;
-    juce::Rectangle<int> closeArea, newArea, composer, chipRow;
-    int hover = -1;   // chip index, 1000 close, 1001 new chat
+    AiKeyPanel keyPanel;
+    juce::Rectangle<int> closeArea, newArea, composer, chipRow, enginePill;
+    int hover = -1;   // chip index, 1000 close, 1001 new chat, 1002 engine pill
     size_t lastCount = 0;
     bool lastBusy = false, lastFocus = false;
 };

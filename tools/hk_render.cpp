@@ -167,6 +167,41 @@ int main (int argc, char** argv)
 
 static int realMain (int argc, char** argv)
 {
+    if (const char* mock = std::getenv ("HK_LLM_MOCK"))   // feed model answers (one JSON per file) through the online-AI parser
+    {
+        std::unique_ptr<hk::SampleBank> bk = SampleLibrary::loadBuiltIn();
+        std::unique_ptr<PresetAI::Context> ctx;
+        std::vector<float> XL, XR;
+        juce::StringArray files; files.addTokens (mock, ",", "");
+        for (auto& fn : files)
+        {
+            const auto content = juce::File (fn).loadFileAsString();
+            bool ok = false; juce::String err;
+            auto r = PresetAI::parseOnline (content, juce::File (fn).getFileNameWithoutExtension(), ctx.get(), ok, err);
+            if (! ok) { std::printf ("\n%s: FAILED (%s)\n", fn.toRawUTF8(), err.toRawUTF8()); continue; }
+            PresetAI::autoLevel (r, bk.get(), ctx.get());
+            std::printf ("\n%s\n  %s\n", fn.toRawUTF8(), r.reply.toRawUTF8());
+            if (! r.hasSound) continue;
+            std::printf ("  [%s] kind=%d gain %.1f dB  chips: %s\n", r.name.toRawUTF8(), r.kind, r.def.gainDb, r.chips.joinIntoString (" | ").toRawUTF8());
+            if (! ctx) ctx = std::make_unique<PresetAI::Context>();
+            ctx->def = r.def; ctx->name = r.name; ctx->kind = r.kind; ctx->request = r.request;
+            if (argc > 1)
+            {
+                hk::SoundDef d = r.def; hk::Params prm = d.preset; prm.sound = hk::kAiSound;
+                int total = 0; double c = 0;
+                auto evs = phraseFor (r.kind, 44100, 124.0, total);
+                std::vector<float> L1, R1;
+                render (bk.get(), prm, evs, total, 44100, 124.0, L1, R1, c, &d);
+                float peak = 0; double sum = 0;
+                for (size_t i = 0; i < L1.size(); ++i) { peak = std::max (peak, std::abs (L1[i])); sum += L1[i] * (double) L1[i]; }
+                std::printf ("  phrase peak %.2f rms %.1f dB\n", peak, 10 * std::log10 (sum / (double) L1.size() + 1e-12));
+                XL.insert (XL.end(), L1.begin(), L1.end()); XR.insert (XR.end(), R1.begin(), R1.end());
+            }
+        }
+        if (argc > 1) writeWav (juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]), XL, XR, 44100);
+        if (std::getenv ("HK_PRINT_PROMPT")) std::printf ("\nPROMPT %d chars\n", PresetAI::buildSystemPrompt().length());
+        return 0;
+    }
     if (std::getenv ("HK_LEVEL_CHECK") != nullptr)   // does autoLevel agree with the factory calibration?
     {
         std::unique_ptr<hk::SampleBank> bk = SampleLibrary::loadBuiltIn();

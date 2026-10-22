@@ -748,8 +748,146 @@ void ChatList::mouseUp (const juce::MouseEvent& e)
 }
 
 //==============================================================================
-ChatPanel::ChatPanel (HouseKeysProcessor& p) : proc (p), list (p)
+AiKeyPanel::AiKeyPanel (HouseKeysProcessor& p) : proc (p)
 {
+    key.setFont (uiFont (16.0f));
+    key.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff1b1724));
+    key.setColour (juce::TextEditor::outlineColourId, col::border.brighter (0.35f));
+    key.setColour (juce::TextEditor::focusedOutlineColourId, col::accent);
+    key.setColour (juce::TextEditor::textColourId, col::text);
+    key.setIndents (14, 12);
+    key.setPasswordCharacter ((juce::juce_wchar) 0x2022);
+    key.setTextToShowWhenEmpty (utf8 ("Lim inn n\xc3\xb8kkelen her (den starter med gsk_)"), col::faint);
+    key.onReturnKey = [this] { save(); };
+    addAndMakeVisible (key);
+
+    openSite.setButtonText (utf8 ("\xc3\x85pne console.groq.com"));
+    saveButton.setButtonText ("Lagre og test");
+    removeButton.setButtonText ("Bruk innebygd AI");
+    closeButton.setButtonText ("Lukk");
+    for (auto* b : { &openSite, &saveButton, &removeButton, &closeButton })
+    {
+        const bool main = b == &saveButton;
+        b->setColour (juce::TextButton::buttonColourId, main ? col::accent : (b == &openSite ? col::violet.withAlpha (0.35f) : col::panel2));
+        b->setColour (juce::TextButton::textColourOffId, main ? col::bg : col::text);
+        b->setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        addAndMakeVisible (*b);
+    }
+    openSite.onClick = [] { juce::URL ("https://console.groq.com/keys").launchInDefaultBrowser(); };
+    saveButton.onClick = [this] { save(); };
+    removeButton.onClick = [this]
+    {
+        proc.setApiKey ({});
+        key.clear();
+        status = utf8 ("N\xc3\xb8kkelen er fjernet. Chatten bruker n\xc3\xa5 den innebygde AI-en.");
+        statusColour = col::dim;
+        repaint();
+    };
+    closeButton.onClick = [this] { if (onClose) onClose(); };
+}
+
+void AiKeyPanel::open()
+{
+    key.setText (proc.getApiKey(), false);
+    status = proc.usesOnlineAi() ? utf8 ("\xe2\x9c\x93  Koblet til Groq. Chatten bruker den ekte AI-en.") : juce::String();
+    statusColour = juce::Colour (0xff45e0b0);
+    setVisible (true);
+    toFront (true);
+    key.grabKeyboardFocus();
+    repaint();
+}
+
+void AiKeyPanel::save()
+{
+    const auto k = key.getText().trim();
+    if (k.isEmpty()) { status = utf8 ("Lim inn n\xc3\xb8kkelen f\xc3\xb8rst."); statusColour = col::hot; repaint(); return; }
+    status = utf8 ("Tester n\xc3\xb8kkelen \xe2\x80\xa6");
+    statusColour = col::dim;
+    repaint();
+    juce::Component::SafePointer<AiKeyPanel> safe (this);
+    juce::Thread::launch ([k, safe]
+    {
+        int code = 0;
+        auto stream = juce::URL ("https://api.groq.com/openai/v1/models")
+                          .createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)
+                                                  .withExtraHeaders ("Authorization: Bearer " + k)
+                                                  .withConnectionTimeoutMs (15000)
+                                                  .withStatusCode (&code));
+        if (stream == nullptr) code = -1;
+        juce::MessageManager::callAsync ([safe, k, code]
+        {
+            if (safe == nullptr) return;
+            auto& self = *safe;
+            if (code == 401 || code == 403)
+            {
+                self.status = utf8 ("N\xc3\xb8kkelen ble ikke godtatt. Sjekk at du kopierte hele (den starter med gsk_).");
+                self.statusColour = col::hot;
+            }
+            else
+            {
+                self.proc.setApiKey (k);
+                if (code == 200) { self.status = utf8 ("\xe2\x9c\x93  N\xc3\xb8kkelen virker! Lukk dette og skriv hva du vil ha i chatten."); self.statusColour = juce::Colour (0xff45e0b0); }
+                else if (code < 0) { self.status = utf8 ("Fikk ikke kontakt med Groq (internett?). N\xc3\xb8kkelen er lagret likevel."); self.statusColour = col::accent; }
+                else { self.status = utf8 ("Groq svarte ") + juce::String (code) + utf8 (". N\xc3\xb8kkelen er lagret, pr\xc3\xb8v chatten."); self.statusColour = col::accent; }
+            }
+            self.repaint();
+        });
+    });
+}
+
+void AiKeyPanel::resized()
+{
+    card = getLocalBounds().withSizeKeepingCentre (700, 410);
+    auto r = card.reduced (32, 0);
+    openSite.setBounds (r.getX(), card.getY() + 196, 230, 36);
+    key.setBounds (r.getX(), card.getY() + 248, r.getWidth(), 44);
+    auto row = juce::Rectangle<int> (r.getX(), card.getY() + 306, r.getWidth(), 38);
+    saveButton.setBounds (row.removeFromLeft (150));
+    row.removeFromLeft (10);
+    removeButton.setBounds (row.removeFromLeft (170));
+    closeButton.setBounds (row.removeFromRight (100));
+}
+
+void AiKeyPanel::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colour (0xe60b0910));
+    auto c = card.toFloat();
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff221c2c), c.getX(), c.getY(), juce::Colour (0xff14111a), c.getX(), c.getBottom(), false));
+    g.fillRoundedRectangle (c, 18.0f);
+    g.setColour (col::violet.withAlpha (0.6f));
+    g.drawRoundedRectangle (c.reduced (0.5f), 18.0f, 1.2f);
+
+    drawSparkle (g, { c.getX() + 30.0f, c.getY() + 26.0f, 36.0f, 36.0f });
+    g.setColour (col::text);
+    g.setFont (uiFont (21.0f, true));
+    g.drawText (utf8 ("Koble til en ekte AI \xe2\x80\x93 gratis"), (int) c.getX() + 80, (int) c.getY() + 24, 560, 26, juce::Justification::centredLeft);
+    g.setColour (col::dim);
+    g.setFont (uiFont (13.0f));
+    g.drawText (utf8 ("Groq gir deg en stor spr\xc3\xa5kmodell gratis (ca. 1000 meldinger om dagen, ingen kredittkort)."),
+                (int) c.getX() + 80, (int) c.getY() + 50, 600, 18, juce::Justification::centredLeft);
+
+    juce::TextLayout tl;
+    tl.createLayout (richText (utf8 ("**1.**  Trykk knappen under og logg inn med Google eller e-post.\n"
+                                     "**2.**  Trykk **Create API Key**, gi den et navn (f.eks. HouseKeys) og trykk **Submit**.\n"
+                                     "**3.**  Trykk **Copy**, lim n\xc3\xb8kkelen inn i feltet under og trykk **Lagre og test**.\n"
+                                     "N\xc3\xb8kkelen lagres bare p\xc3\xa5 din Mac. Uten n\xc3\xb8kkel bruker chatten den innebygde AI-en."),
+                                15.0f, col::text.withAlpha (0.82f), juce::Colours::white),
+                     c.getWidth() - 64.0f);
+    tl.draw (g, { c.getX() + 32.0f, c.getY() + 92.0f, c.getWidth() - 64.0f, 140.0f });
+
+    if (status.isNotEmpty())
+    {
+        g.setColour (statusColour);
+        g.setFont (uiFont (14.0f, true));
+        g.drawFittedText (status, (int) c.getX() + 32, (int) c.getY() + 354, (int) c.getWidth() - 64, 40, juce::Justification::centredLeft, 2);
+    }
+}
+
+//==============================================================================
+ChatPanel::ChatPanel (HouseKeysProcessor& p) : proc (p), list (p), keyPanel (p)
+{
+    addChildComponent (keyPanel);
+    keyPanel.onClose = [this] { keyPanel.setVisible (false); refresh (false); input.grabKeyboardFocus(); };
     view.setViewedComponent (&list, false);
     view.setScrollBarsShown (true, false);
     view.setScrollBarThickness (8);
@@ -847,6 +985,8 @@ void ChatPanel::resized()
     composer = { 24, H - 20 - 52, W - 48, 52 };
     chipRow = { 26, composer.getY() - 12 - 30, W - 52, 30 };
     view.setBounds (12, 70, W - 24, chipRow.getY() - 10 - 70);
+    enginePill = { newArea.getX() - 12 - 240, 18, 240, 30 };
+    keyPanel.setBounds (getLocalBounds());
     sendButton.setBounds (composer.getRight() - 46, composer.getY() + 6, 40, 40);
     input.setBounds (composer.getX() + 18, composer.getY() + 3, composer.getWidth() - 18 - 54, composer.getHeight() - 6);
     refresh (true);
@@ -875,7 +1015,23 @@ void ChatPanel::paint (juce::Graphics& g)
     g.fillEllipse (75.0f, 44.0f, 7.0f, 7.0f);
     g.setColour (col::dim);
     g.setFont (uiFont (12.5f));
-    g.drawText (utf8 ("Gratis  \xc2\xb7  lager helt nye lyder  \xc2\xb7  virker uten internett"), 88, 38, 500, 18, juce::Justification::centredLeft);
+    g.drawText (proc.usesOnlineAi() ? utf8 ("Gratis Groq AI  \xc2\xb7  forst\xc3\xa5r vanlige setninger  \xc2\xb7  lager helt nye lyder")
+                                    : utf8 ("Innebygd AI  \xc2\xb7  gratis  \xc2\xb7  virker uten internett"), 88, 38, 560, 18, juce::Justification::centredLeft);
+    {
+        // which AI is answering; click to set up the free online AI
+        auto pr = enginePill.toFloat();
+        const bool online = proc.usesOnlineAi();
+        const auto pc = online ? juce::Colour (0xff45e0b0) : col::accent;
+        g.setColour (pc.withAlpha (hover == 1002 ? 0.28f : 0.14f));
+        g.fillRoundedRectangle (pr, 15.0f);
+        g.setColour (pc.withAlpha (0.8f));
+        g.drawRoundedRectangle (pr.reduced (0.5f), 15.0f, 1.0f);
+        g.fillEllipse (pr.getX() + 14.0f, pr.getCentreY() - 3.5f, 7.0f, 7.0f);
+        g.setColour (col::text);
+        g.setFont (uiFont (13.0f, true));
+        g.drawText (online ? utf8 ("Groq AI er p\xc3\xa5  \xc2\xb7  innstillinger") : utf8 ("Koble til ekte AI (gratis)"), enginePill.withTrimmedLeft (30),
+                    juce::Justification::centredLeft);
+    }
 
     const bool hasChat = ! proc.getChat().empty();
     if (hasChat)
@@ -924,6 +1080,7 @@ void ChatPanel::mouseMove (const juce::MouseEvent& e)
     for (size_t i = 0; i < chips.size(); ++i) if (chips[i].first.contains (e.getPosition())) h = (int) i;
     if (closeArea.contains (e.getPosition())) h = 1000;
     if (! proc.getChat().empty() && newArea.contains (e.getPosition())) h = 1001;
+    if (enginePill.contains (e.getPosition())) h = 1002;
     if (h != hover) { hover = h; repaint(); }
     setMouseCursor (h >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
 }
@@ -934,6 +1091,7 @@ void ChatPanel::mouseUp (const juce::MouseEvent& e)
 {
     if (closeArea.contains (e.getPosition())) { setVisible (false); if (onClose) onClose(); return; }
     if (! proc.getChat().empty() && newArea.contains (e.getPosition())) { proc.clearChat(); return; }
+    if (enginePill.contains (e.getPosition())) { keyPanel.open(); return; }
     for (auto& c : chips)
         if (c.first.contains (e.getPosition())) { send (c.second); return; }
 }
